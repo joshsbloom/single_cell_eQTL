@@ -2,9 +2,9 @@
 # takes genotype calls and genetic map as input
 # for now either expecting f2 like data (multi-generation intercross)
 # or haploid data (for now using r/qtl 'riself') but should update to new r/qtl2 class that handles haploids?
-buildCrossObject=function(graw, gmap.s, cross.type='f2' ) { 
+buildCrossObject=function(graw, gmap.s, cross.type='f2',marker.delim=':' ) { 
     #chr
-    chr=tstrsplit(rownames(graw), ':')[[1]]
+    chr=tstrsplit(rownames(graw), marker.delim)[[1]]
     #cell name
     id=colnames(graw)
 
