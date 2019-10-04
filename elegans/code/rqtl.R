@@ -131,8 +131,9 @@ buildCross2=function(rQTL.coded, gmap.s, counts) {
 rQTLHMM=function(cross2.file,hmm.out.dir) {
     #cross2.file= '/data/single_cell_eQTL/elegans/XQTL_F4_2/cross2_v2.RData'                
     #hmm.out.dir='/data/single_cell_eQTL/elegans/XQTL_F4_2/hmm_v2/'
+    #additive.geno.file='/data/single_cell_eQTL/elegans/XQTL_F4_2/additive.geno_v2.RDS'
+    
     cross2=readRDS(cross2.file)
-
     nind=nrow(cross2$cross_info)
     cc=cut(1:nind, 100)
 
@@ -147,27 +148,63 @@ rQTLHMM=function(cross2.file,hmm.out.dir) {
         saveRDS(gps, file=paste0(hmm.out.dir, iter))
         iter=iter+1
     }
+
+    # could do a map reduction here 
+    #reduced_map=reduce_markers(cross2$gmap,.5)
+
+    additive.geno=list()
+    cc=cut(1:nind, 100)
+    for(iter in 1:length(unique(cc))){
+        #print(ccc)
+        #gps=mgeno[[ccc]]
+        ccc=unique(cc)[iter]
+        print(ccc)
+        gps=readRDS(paste0(hmm.out.dir, iter))
+        #calculate p(CB)
+        ag=lapply(gps, function(x) .5*x[,2,]+x[,3,]) 
+        # go ahead and make map a bit more sparse, too dense 
+        #ag=mapply(function(x,y){y[,names(x)]}, x=reduced_map, y=ag)
+        additive.geno[[ccc]]=do.call('cbind', ag) 
+    }
+    additive.geno=do.call('rbind', additive.geno)
+    #saveRDS(additive.geno, additive.geno.file )
 }
 
+
 # HMM diagnostic plots
-    
+# G is rqtl genotype probabilities
+# rQTL.coded 
+# posteriorProbs is custom hmm genoprobs
+# viterbiPath is custom hmm viterbi output
+diagnoseHMM=function(indiv=1, chrom='II', 
+                     gmap.s, N2.counts,CB.counts, 
+                     additiveCoding, rQTL.coded, G=NULL,
+                     viterbiPath=NULL){
+     
+        coi=paste0('^', chrom, '_')
+        # marker indices for relevant chromosome 
+        mind=grep(coi, rownames(rQTL.coded))
+        hardcall=rQTL.coded[mind, indiv] #cross2$geno[[coii]][indiv,]
 
-
-#    G=readRDS('/data/single_cell_eQTL/elegans/XQTL_F4_2/additive.geno_v2.RDS')
-#    
-#    hardcall=cross2$geno[[coii]][indiv,]
-#    par(oma=c(2,2,2,2))
-#    plot(gdist,-N2.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall, main =rownames(G)[indiv], ylab='-N2, + CB')
-#    abline(h=0)
-#    points(gdist,CB.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall)
-#    legend('topright', c('CC', 'NC', 'NN', 'NN or NC', 'NC or CC'), fill=c('green', 'red', 'black', 'blue', 'cyan'))
-#
-#    par(new = T)
-#    plot(gdist,G[indiv,mind], col='red', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='')
-#    points(gdist,(posteriorProb[indiv,3,]+.5*posteriorProb[indiv,2,]), col='purple', type='l', lwd=2)
-#    axis(side = 4)
-#    mtext(side = 4, line = 3, 'Posterior Prob(CB)')
-#    readline()
+        gdist=gmap.s[[chrom]]$map
+        par(oma=c(2,2,2,2))
+        plot(gdist,-N2.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall,
+             main =paste(indiv, colnames(rQTL.coded)[indiv]), ylab='-N2, + CB  (counts)' ,xlab='genetic distance (cM))')
+        abline(h=0)
+        points(gdist,CB.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall)
+        legend('topright', c('CC', 'NC', 'NN', 'NN or NC', 'NC or CC'), fill=c('green', 'red', 'black', 'blue', 'cyan'), horiz=F, pt.cex=.5)
+        par(new = T)
+        if(!is.null(G)){
+             plot(gdist,G[indiv,mind], col='red', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='', xlab='')
+             points(gdist,additiveCoding[[chrom]][indiv,mind], col='purple', type='l', lwd=2)
+        }
+        else {
+              plot(gdist,additiveCoding[[chrom]][indiv,mind], col='purple', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='', xlab='')
+        }
+        axis(side = 4)
+        mtext(side = 4, line = 3, 'Posterior Prob(CB)')
+}
+    #readline()
 
 #black is NN
 #red is NC
