@@ -188,20 +188,30 @@ diagnoseHMM=function(indiv=1, chrom='II',
 
         gdist=gmap.s[[chrom]]$map
         par(oma=c(2,2,2,2))
-        plot(gdist,-N2.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall,
-             main =paste(indiv, colnames(rQTL.coded)[indiv]), ylab='-N2, + CB  (counts)' ,xlab='genetic distance (cM))')
+        if(!is.null(viterbiPath)){
+            plot(gdist,5*(viterbiPath[[chrom]][indiv,]-2), col='grey70', type='l', ylim=c(-5,5), lwd=3,
+                main =paste(indiv, colnames(rQTL.coded)[indiv]), ylab='-N2, + CB  (counts)' ,xlab='genetic distance (cM))', sub=chrom
+            )
+            points(gdist,-N2.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall )
+
+        }else{
+            plot(gdist,-N2.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall,
+                main =paste(indiv, colnames(rQTL.coded)[indiv]), ylab='-N2, + CB  (counts)' ,xlab='genetic distance (cM))', sub=chrom)
+        }
         abline(h=0)
         points(gdist,CB.counts[mind,indiv], type='h', ylim=c(-5,5),col=hardcall)
+        
+
         legend('topright', c('CC', 'NC', 'NN', 'NN or NC', 'NC or CC'), fill=c('green', 'red', 'black', 'blue', 'cyan'), horiz=F, pt.cex=.5)
         par(new = T)
         if(!is.null(G)){
              plot(gdist,G[indiv,mind], col='red', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='', xlab='')
-             points(gdist,additiveCoding[[chrom]][indiv,mind], col='purple', type='l', lwd=2)
+             points(gdist,additiveCoding[[chrom]][indiv,], col='purple', type='l', lwd=2)
         }
         else {
-              plot(gdist,additiveCoding[[chrom]][indiv,mind], col='purple', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='', xlab='')
+              plot(gdist,additiveCoding[[chrom]][indiv,], col='purple', type='l', axes=F, ylim=c(0,1), lwd=2, ylab='', xlab='')
         }
-        axis(side = 4)
+                axis(side = 4)
         mtext(side = 4, line = 3, 'Posterior Prob(CB)')
 }
     #readline()
