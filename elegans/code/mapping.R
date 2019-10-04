@@ -121,16 +121,21 @@ for(cc in chroms) {
 }
 #---------------------------------------------------------------
 cP=do.call('rbind', cPeaks)
-plot(match(cP$peak.marker[cP$FDR<.01], colnames(G)),
-     match(cP$transcript[cP$FDR<.01], transcript.data$wormbase_gene), 
-      xlab='marker index', ylab='transcript index', main='joint analysis FDR < 1%')
+plot(match(cP$peak.marker[cP$FDR<.0001], colnames(G)),
+     match(cP$transcript[cP$FDR<.0001], transcript.data$wormbase_gene), 
+      xlab='marker index', ylab='transcript index', main='joint analysis FDR < 0.01%')
+
+saveRDS(cP, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks.RDS')
+
+
 
 
 # Map within each tissue type --------------------------------------------------
 qtl.maps=list()
 qtl.fdrs=list()
-rho.matrices=list()
-residual.matrices=list()
+#gets to be too much to retain these, should dump to files
+#rho.matrices=list()
+#residual.matrices=list()
 fc=unique(as.character(joint.covariates$fine_tissue))
 fc=fc[!is.na(fc)]
 bc=unique(as.character(joint.covariates$broad_tissue))
@@ -161,7 +166,7 @@ for(kk in 1:length(types)) {
     rownames(Yresid)=rownames(Yk)
     colnames(Yresid)=colnames(Yk)
     rm(BOLS)
-    residual.matrices[[uc]]=Yresid
+    #residual.matrices[[uc]]=Yresid
 
     #so slow ...
     Yfe=standardise2(Yresid)
@@ -170,13 +175,13 @@ for(kk in 1:length(types)) {
     Gf=standardise2(Gsub)
     colnames(Gf)=colnames(G)
     rownames(Gf)=rownames(Yfe)
-    #transcripts that are singular after the regression
+    #transcripts that are singular after the regression (no variance = nothing to map on)
     shitT=unique(which(is.na(Yfe), arr.ind=T)[,2])
     Yfe=Yfe[,-shitT]
 
     # then map within each classification
     rff=crossprod(Yfe,Gf)/(nrow(Yfe)-1)
-    rho.matrices[[uc]]=rff
+    #rho.matrices[[uc]]=rff
     LODr=-nrow(Yfe)*log(1-rff^2)/(2*log(10))
 
     fdrfx.fc=getFDRfx(rff,Yfe,Gf,nperm=5,vint=seq(0.001,.45,.001))
@@ -194,10 +199,11 @@ for(kk in 1:length(types)) {
         LODstat=LODr[,moi][lookup]
         CIs=matrix(NA,length(mstat),2)
         cmoi=colnames(LODr[,moi])
+        #this could use a speedup
         for(peak in 1:length(mstat)){
-            CIs[peak,]=cmoi[range(which(LODr[peak,moi]>LODstat[peak]-1.5))]
+            LODrv=LODr[peak,moi]
+            CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
         }   
-
         cPeaksT[[cc]]=data.frame( transcript=rownames(rS),
                              peak.marker=colnames(rS)[mstat.pos],
                              CI.l=CIs[,1],
@@ -209,11 +215,20 @@ for(kk in 1:length(types)) {
     }
  
    qtl.maps[[uc]]=rbindlist(cPeaksT, idcol='chrom')
+
+
+   cPt=qtl.maps[[uc]]
+   if(sum(cPt$FDR<.2)>0) {
+       plot(match(cPt$peak.marker[cPt$FDR<.2], colnames(G)),
+         match(cPt$transcript[cPt$FDR<.2], transcript.data$wormbase_gene), 
+          xlab='marker index', ylab='transcript index', main=paste(uc, 'joint analysis FDR < 20%'))
+   }
    print(sum(qtl.maps[[uc]]$FDR<.2, na.rm=T))
 }
 #---------------------------------------------------------------------------------------------------
 
 
+saveRDS(qtl.maps, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_perTissuePeaks.RDS')
 
 
 
@@ -226,6 +241,17 @@ plot(match(cPt$peak.marker[cPt$FDR<.9], colnames(G)),
 
 
 
+library(data.table)
+library(ggsci)
+library(ggplot2)
+
+qm=rbindlist(qtl.maps,idcol='tissue')
+qm$markerpos=match(qm$peak.marker, colnames(G))
+qm$tpos=match(qm$transcript, transcript.data$wormbase_gene)
+tkk=names(which(sapply(qtl.maps, nrow)>100))
+qm=qm[qm$tissue %in% tkk,]
+qm=qm[qm$FDR<.05,]
+ggplot(qm,aes(x=markerpos,y=tpos, color=tissue))+geom_point() #+scale_color_brewer(palette='Set1')
 
 
 
