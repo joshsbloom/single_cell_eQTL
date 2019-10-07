@@ -1,10 +1,12 @@
-getFDRfx=function(r, Yre,Gr,nperm=5, vint=seq(0.001,.15,.001)){
+#fdrfx.fc=getFDRfx(rff,Yfe,Gf,nperm=5,vint=seq(0.001,.45,.001))
+
+getFDRfx=function(rff, Yfe,Gf,nperm=5, vint=seq(0.001,.15,.001)){
     
-    max.obsLOD=apply(abs(r),1,max)
+    max.obsLOD=apply(abs(rff),1,max)
     # no point keeping all this, just retain max stats 
     ll=replicate(nperm, {
-                    nind=sample(1:nrow(Yre))
-                    rowMaxs(abs(crossprod(Yre[nind,],Gr)/(nrow(Yre)-1)),value=T)
+                    nind=sample(1:nrow(Yfe))
+                    rowMaxs(abs(crossprod(Yfe[nind,],Gf)/(nrow(Yfe)-1)),value=T)
     })
 
     #ll=apply(abs(permR),3, function(x) apply(x,1,max))
@@ -25,8 +27,8 @@ getFDRfx=function(r, Yre,Gr,nperm=5, vint=seq(0.001,.15,.001)){
     pFDR[!is.finite(pFDR)]=0
     #to make sure this is monotonic
     
-    
     pFDR = rev(cummax(rev(pFDR)))
+    pFDR[1]=pFDR[1]-(1e-3)
     fdrFX=approxfun(pFDR, vint, ties=mean)
     rtoFDRfx=approxfun(vint,pFDR, ties=mean)
 
@@ -47,9 +49,12 @@ Yr=Y[crit,]
 #calc Variance for each transcript, if zero, boot it
 Yr.var=colVars(Yr, parallel=T)
 Yr=Yr[,Yr.var>0]
+#additional filter, expressed in at least 10 cells
+tcounts=Yr>0
+tcounts=colSums(tcounts)
+Yr=Yr[,tcounts>10]
 
 Gr=geno[crit,]
-
 G=standardise2(Gr)
 colnames(G)=colnames(G)
 rownames(G)=rownames(Yr)
@@ -121,13 +126,11 @@ for(cc in chroms) {
 }
 #---------------------------------------------------------------
 cP=do.call('rbind', cPeaks)
-plot(match(cP$peak.marker[cP$FDR<.0001], colnames(G)),
-     match(cP$transcript[cP$FDR<.0001], transcript.data$wormbase_gene), 
-      xlab='marker index', ylab='transcript index', main='joint analysis FDR < 0.01%')
+plot(match(cP$peak.marker[cP$FDR<.10], colnames(G)),
+     match(cP$transcript[cP$FDR<.10], transcript.data$wormbase_gene), 
+      xlab='marker index', ylab='transcript index', main='joint analysis FDR < 10%')
 
-saveRDS(cP, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks.RDS')
-
-
+saveRDS(cP, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks_filt.RDS')
 
 
 # Map within each tissue type --------------------------------------------------
@@ -143,7 +146,7 @@ bc=bc[!is.na(bc)]
 types=c(bc,fc)
 cty=c(rep('broad', length(bc)), rep('fine', length(fc)))
 
-for(kk in 1:length(types)) {
+for(kk in 33:length(types)) {
     uc=types[kk]
     print(uc)
     if(cty[kk]=='broad') {
@@ -154,9 +157,15 @@ for(kk in 1:length(types)) {
         tk=which(joint.covariates$fine_tissue==uc)
         print('fine')
     }
-    
+    print(kk)
+
     covs=joint.covariates[tk,]
     Yk=Yr[tk,]
+    #additional filter, expressed in at least 10 cells
+    tcounts=Yk>0
+    tcounts=colSums(tcounts)
+    Yk=Yk[,tcounts>10]
+
     Gsub=Gr[tk,]
 
     # OLS, replace with glm for next iteration
@@ -177,7 +186,7 @@ for(kk in 1:length(types)) {
     rownames(Gf)=rownames(Yfe)
     #transcripts that are singular after the regression (no variance = nothing to map on)
     shitT=unique(which(is.na(Yfe), arr.ind=T)[,2])
-    Yfe=Yfe[,-shitT]
+    if(length(shitT)>0) {    Yfe=Yfe[,-shitT] } 
 
     # then map within each classification
     rff=crossprod(Yfe,Gf)/(nrow(Yfe)-1)
@@ -219,16 +228,15 @@ for(kk in 1:length(types)) {
 
    cPt=qtl.maps[[uc]]
    if(sum(cPt$FDR<.2)>0) {
-       plot(match(cPt$peak.marker[cPt$FDR<.2], colnames(G)),
-         match(cPt$transcript[cPt$FDR<.2], transcript.data$wormbase_gene), 
-          xlab='marker index', ylab='transcript index', main=paste(uc, 'joint analysis FDR < 20%'))
+       plot(match(cPt$peak.marker[cPt$FDR<.01], colnames(G)),
+         match(cPt$transcript[cPt$FDR<.01], transcript.data$wormbase_gene), 
+          xlab='marker index', ylab='transcript index', main=paste(uc, 'joint analysis FDR < 1%'))
    }
    print(sum(qtl.maps[[uc]]$FDR<.2, na.rm=T))
 }
 #---------------------------------------------------------------------------------------------------
 
-
-saveRDS(qtl.maps, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_perTissuePeaks.RDS')
+saveRDS(qtl.maps, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_perTissuePeaks_filt.RDS')
 
 
 
