@@ -116,23 +116,163 @@ getGlobalPeaks=function(rff, LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
  
     cP=rbindlist(cPeaksT, idcol='chrom')
     cP$peak.marker=as.character(cP$peak.marker)
+    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
+    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
     cP$CI.l=as.character(cP$CI.l)
     cP$CI.r=as.character(cP$CI.r)
-    
-    cP$peakGpos=markerGR$gcoord[match(cP$peak.marker, colnames(rff))]
-    cP$tGpos=transcript.data$gcoord[match(cP$transcript, transcript.data$wormbase_gene)]
-    cP$peakLGpos=markerGR$gcoord[match(cP$CI.l, colnames(rff))]
-    cP$peakRGpos=markerGR$gcoord[match(cP$CI.r, colnames(rff))]
+    cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
+    cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
+    #cP$peakGpos=markerGR$gcoord[match(cP$peak.marker, colnames(rff))]
+    #cP$tGpos=transcript.data$gcoord[match(cP$transcript, transcript.data$wormbase_gene)]
+    #cP$peakLGpos=markerGR$gcoord[match(cP$CI.l, colnames(rff))]
+    #cP$peakRGpos=markerGR$gcoord[match(cP$CI.r, colnames(rff))]
     #saveRDS(cP, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks_filt.RDS')
     #cP=readRDS('/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks_filt.RDS')
     cP$tchr=transcript.data$chromosome_name[match(cP$transcript, transcript.data$wormbase_gene)]
-    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
-    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
+    cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$wormbase_gene)]
+    cP=cP[cP$tchr %in% c("X","V","IV","III","II","I"),]
+    cP$tchr=factor(cP$tchr,levels=c("X","V","IV","III","II","I"))
+    cP$chr=factor(cP$chr,levels=rev(c("X","V","IV","III","II","I")))
     return(cP)
 }
 #---------------------------------------------------------------------------------------------------
 
+fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids='deviance') {
+    mmp0=mmp1[,-1]
+
+    nbR=Yk
+    nbR[is.numeric(nbR)]=NA
+    #nbP=nbR
+
+    cisNB=list() 
+    for(r in 1:nrow(cMsubset)){
+        print(r)
+        gn=as.character(cMsubset$transcript[r])
+        p=as.character(cMsubset$marker[r])
+        cmodel=cbind(mmp0, Gsub[,p])
+        nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
+        if(!is.na(nbr$info[4]) & (nbr$info[4]<100) ){
+             theta.est=nbr$info[4]
+             coef.est=nbr$be[,1]
+        } else {
+            nbr=mgcv::gam(Yk[,gn]~cmodel, family=mgcv::nb , method="ML")
+            theta.est=nbr$family$getTheta(T)
+            coef.est=as.vector(coef(nbr))
+        }
+        XX=cbind(mmp1, Gsub[,p])
+        msize=ncol(XX)
+        fnbrF=fastglm(XX, Yk[,gn], start=coef.est, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        fnbrN=fastglm(mmp1,Yk[,gn], start=coef.est[-msize],  family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
+        if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
+        cisNB[[gn]]$transcript=gn
+        cisNB[[gn]]$lmarker=p
+        cisNB[[gn]]$theta=theta.est
+        cisNB[[gn]]$negbin.beta=as.numeric(coef(fnbrF)[msize])
+        cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[msize])
+        cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
+        cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
+        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) #-2*(nmodel-plr)
+        cisNB[[gn]]$fmodelBs=coef(fnbrF)
+        print(cisNB[[gn]])
+    }
+
+    nbR.var=colVars(nbR)
+    nbR=nbR[,-which(is.na(nbR.var))]
+    
+    return(list(cisNB=cisNB, nbR=nbR))
+}
+
+fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, cMsubset,sig=.1 ) {
+        tcPsig=data.frame(tcP[tcP$FDR<sig,])
+        tcPsig$negbin.beta=NA
+        tcPsig$negbin.se=NA
+        tcPsig$LLik=NA
+        tcPsig$negbin.LRS=NA
+        tcPsig$negbin.p=NA
+        #mmp0=mmp1[,-1]
+        for(r in 1:nrow(tcPsig)){
+            print(r)
+            gn=as.character(tcPsig[r,]$transcript)
+            pcis=as.character(cMsubset$marker[match(gn, cMsubset$transcript)])
+            pmarker=as.character(tcPsig[r,]$peak.marker)
+            theta.est=cisNB[[gn]]$theta
+            nmLLik=cisNB[[gn]]$LLik
+            XX=cbind(mmp1, Gsub[,pcis], Gsub[,pmarker])
+            msize=ncol(XX)
+            fnbrF=fastglm(XX, Yk[,gn],family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+            tcPsig$negbin.beta[r]=as.numeric(coef(fnbrF)[msize])
+            tcPsig$negbin.se[r]=as.numeric(fnbrF$se[msize])
+            tcPsig$LLik[r]=as.numeric(logLik(fnbrF))
+            tcPsig$negbin.LRS[r]=as.numeric(-2*(nmLLik-logLik(fnbrF)))
+            tcPsig$negbin.p[r]=pchisq( tcPsig$negbin.LRS[r],1, lower.tail=F) #-2*(nmodel-plr)
+            print(tcPsig[r,])
+        }
+        return(tcPsig)
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #tcP_nb=negbinRefit(tcP, Yk, mmp0, fdr.thresh=.1)
+negbinNullDev=function(tnames, Yk, mmp1, nbM0, covs, threshold=100) { #0,m.to.theta ) {
+    #, smoothed.disp){
+    logLikV=rep(NA, length(tnames))
+    names(logLikV)=tnames
+    thetaV=rep(NA, length(tnames))
+    names(thetaV)=tnames
+    nbR=Yk
+    nbR[is.numeric(nbR)]=NA
+    mexp=colMeans(Yk)
+    for(gn in tnames){
+        print(match(gn, tnames))
+        nmodelf=nbM0[[gn]]
+        theta=nmodelf$info[4]
+        if(is.na(theta) | theta>threshold ){
+              test=mgcv::gam(Yk[,gn]~covs$Batch, offset=log(covs$total), family=mgcv::nb , method="ML")
+              theta=test$family$getTheta(T)
+        }
+        #theta.smoothed=m.to.theta(mexp[gn])
+        #theta.smoothed=smoothed.disp[gn]
+        #nbr=mgcv::gam(Yk[,gn]~covs$Batch, offset=log(covs$total), family=mgcv::nb , method="ML")
+        nbr= tryCatch({
+            #fastglm(mmp1, Yk[,gn], family=negative.binomial(theta=nmodelf$info[4],link='log'))},
+            fastglm(mmp1, Yk[,gn], family=negative.binomial(theta=theta,link='log'))},
+            error=function(e){return(NULL);})
+        if(is.null(nbr)) {next;}
+        logLikV[gn]=logLik(nbr)
+        #thetaV[gn]=nmodelf$info[4] #nbr$family$getTheta(T)
+        thetaV[gn]=theta
+        nbR[,gn]=residuals(nbr,'deviance') 
+    }
+    Yfe.var=colVars(nbR)
+    nbR=nbR[,which(!is.na(Yfe.var))]
+    return(list(nbR=nbR, logLik=logLikV, theta=thetaV))
+    #return(nbR)
+}
+
+
+
+
+
 
 
 negbinNull=function(tnames, Yk, mmp1){
@@ -143,6 +283,22 @@ negbinNull=function(tnames, Yk, mmp1){
       }
     return(nbregs)
 }
+#use theta.ml trick and poisson regression for speedup here
+negbinNullP=function(tnames, Yk, mmp2){
+    nbregs=list()  
+    for(gn in tnames){
+        print(match(gn, colnames(Yk)))
+       # test=mgcv::gam(Yk[,gn]~mmp1[,-1], family=mgcv::nb , method="ML")
+
+      #  test2=fastglm(mmp1,Yk[,gn],family=poisson(link='log'), method=3)
+      #  pt2=predict(test2,mmp1)
+      #  nbregs[[gn]]=theta.ml(Yk[,gn], exp(pt2), limit=50)
+        nbregs[[gn]]=(negbin.reg(Yk[,gn], mmp2[,-1],maxiters=500) )
+      }
+    return(nbregs)
+}
+
+
 negbinRefitHotspots=function(pms, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
     
     #tcP_nb=tcP[tcP$FDR<fdr.thresh,]
@@ -202,7 +358,7 @@ negbinRefitHotspots=function(pms, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
 
 
 
-negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
+negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1,sfit) {
     tcP_nb=tcP[tcP$FDR<fdr.thresh,]
     tcP_nb$transcript=droplevels(tcP_nb$transcript)
     tcP_nb=split(tcP_nb, tcP_nb$transcript)
@@ -215,8 +371,12 @@ negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
             #test=fastglm(mmp1[,-1], Yk[,gn], family=poisson(link='log'))
             #test=fastglm(mmp1, Yk[,gn], family=negative.binomial(theta=nmodelf$info[4],link='log'))
 
-            nmodel=nmodelf$info[3]     
-            if(is.na(nmodel)) {next;}
+            #nmodelLL=nmodelf$info[3]     
+            nmodelLL=sfit$logLik[gn]
+            #theta.est=nmodelf$info[4]
+            theta.est=sfit$theta[gn]
+            
+            if(is.na(nmodelLL)) {next;}
             pms=as.character(tcP_nb[[gn]]$peak.marker)
 
             plr=rep(0, length(pms))
@@ -229,7 +389,7 @@ negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
             for(p in pms) {
                 fm=tryCatch({
                     #negbin.reg(Yk[,gn], cbind(mmp1[,-1],Gsub[,p]))
-                    fastglm(cbind(mmp1,Gsub[,p]), Yk[,gn], family=negative.binomial(theta=nmodelf$info[4],link='log'))
+                    fastglm(cbind(mmp1,Gsub[,p]), Yk[,gn], family=negative.binomial(theta=theta.est,link='log'))
                 }
                     ,error=function(e) {return(NULL);})
                   if(is.null(fm)){
@@ -248,7 +408,7 @@ negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
             }
             tcP_nb[[gn]]$negbin.beta=plb
             tcP_nb[[gn]]$negbin.se=pls
-            tcP_nb[[gn]]$negbin.LRS=-2*(nmodel-plr)
+            tcP_nb[[gn]]$negbin.LRS=-2*(nmodelLL-plr)
             tcP_nb[[gn]]$negbin.p=pchisq( tcP_nb[[gn]]$negbin.LRS,1, lower.tail=F) #-2*(nmodel-plr)
             print(gn)
             print(tcP_nb[[gn]])
@@ -256,13 +416,17 @@ negbinRefit=function(tcP, Yk, Gsub, mmp1, nbM0, fdr.thresh=.1) {
     return(tcP_nb)
 }
 
-cisNegbinFit=function(cMsubset, Yk, Gsub, mmp1, nbM0) {
+cisNegbinFit=function(cMsubset, Yk, Gsub, mmp1, nbM0, sfit) {
     cisNB=list() 
     for(i in 1:nrow(cMsubset)){
          print(i)
          gn=cMsubset[i,'transcript']
          nmodelf=nbM0[[gn]]
          nmodel=nmodelf$info[3]     
+          
+         nmodelLL=sfit$logLik[gn]
+         #theta.est=nmodelf$info[4]
+         theta.est=sfit$theta[gn]
 
          if(is.na(nmodel)) {next;}
          p=cMsubset[i,'marker']
@@ -272,7 +436,9 @@ cisNegbinFit=function(cMsubset, Yk, Gsub, mmp1, nbM0) {
          pls=NA
          fm=tryCatch({
                     #negbin.reg(Yk[,gn], cbind(mmp1[,-1],Gsub[,p]))
-                    fastglm(cbind(mmp1,Gsub[,p]), Yk[,gn], family=negative.binomial(theta=nmodelf$info[4],link='log'))
+                    #fastglm(cbind(mmp1,Gsub[,p]), Yk[,gn], family=negative.binomial(theta=nmodelf$info[4],link='log'))
+                    fastglm(cbind(mmp1,Gsub[,p]), Yk[,gn], family=negative.binomial(theta=theta.est,link='log'))
+
                 }
                     ,error=function(e) {return(NULL);})
          if(is.null(fm)){
@@ -290,7 +456,7 @@ cisNegbinFit=function(cMsubset, Yk, Gsub, mmp1, nbM0) {
          }
         cisNB[[gn]]$negbin.beta=plb
         cisNB[[gn]]$negbin.se=pls
-        cisNB[[gn]]$negbin.LRS=-2*(nmodel-plr)
+        cisNB[[gn]]$negbin.LRS=-2*(nmodelLL-plr)
         cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) #-2*(nmodel-plr)
      }
     return(cisNB)
@@ -304,13 +470,13 @@ getHotspots=function(tcP, gmapd, fdr.thresh=.05, pFDR=T) {
     if(pFDR) {
         cPsig=tcP[tcP$FDR<fdr.thresh,] 
     } else{
-        cPsig=tcP[tcP$FDR.negbin<fdr.thresh,]
+        cPsig=tcP[tcP$FDR.negbin<fdr.thresh & tcP$FDR<fdr.thresh,]
     }
     
     cPsig.nocis=cPsig[cPsig$tchr!=cPsig$chr,]
     cPsig.nocis$cm5bin=gmapd$cm5bin[match(cPsig.nocis$peak.marker, gmapd$marker)]
     
-    bcount=data.frame(values=1:130, lengths=0)
+    bcount=data.frame(values=1:max(gmapd$cm5bin), lengths=0)
 
     bcountr=rle(sort(cPsig.nocis$cm5bin))
     bcount$lengths[bcountr$values]=bcountr$lengths
