@@ -1,34 +1,57 @@
- 
-generatePlot = function(jointPeaks,dfReturn=F,cutoff=0.1)
-{
-  colnames(jointPeaks)[colnames(jointPeaks)=="peak.marker"] = "marker"
-  jointPeaks = data.frame(jointPeaks,chr=gsub("_+.*","",jointPeaks$marker),pos=as.numeric(gsub(".*_","",jointPeaks$marker)))
-  jointPeaksGeneAnnots = geneAnnotsCur[match(jointPeaks$transcript,geneAnnotsCur$wbps_gene_id),]
-  jointPeaks = jointPeaks[jointPeaksGeneAnnots$chromosome_name!="MtDNA",]
-  jointPeaksGeneAnnots = jointPeaksGeneAnnots[jointPeaksGeneAnnots$chromosome_name!="MtDNA",]
-  plot_df = data.frame(jointPeaks,jointPeaksGeneAnnots) %>% filter(FDR<cutoff)
-  plot_df$chromosome_name = factor(plot_df$chromosome_name,levels=c("X","V","IV","III","II","I"))
-  if(dfReturn)
-  {
-    plot_df
-  }else
-  {
- (ggplot(plot_df,aes(x=pos,y=start_position)) + facet_grid(chromosome_name~chr,scales="free") + geom_point(aes(alpha=-log10(FDR))) + theme_classic())
+#elegans chromosomes 
+chroms=c('I', 'II', 'III', 'IV', 'V', 'X')
+
+# parallelized standardise function
+standardise2 <- function (x, center = TRUE, scale = TRUE) {
+  if ( center & scale ) {
+    y <- t(x) - Rfast::colmeans(x,parallel=T)
+    y <- y / sqrt( Rfast::rowsums(y^2) ) * sqrt( (dim(x)[1] - 1) )
+	y <- t(y)
+  } else if ( center & !scale ) {
+    m <- Rfast::colmeans(x,parallel=T)
+    y <- eachrow(x, m, oper ="-" )
+  } else if ( !center & scale ) {
+    s <- Rfast::colVars(x, std = TRUE,parallel=T)
+    y <- eachrow(x, s, oper = "/")
   }
+  colnames(y)=colnames(x)
+  rownames(y)=rownames(x)
+  y
+} 
+
+# wrapper for abind commmands
+acomb1 <- function(...) abind(..., along=1)
+
+
+# bin markers to genetic map 
+# bin. size is centimorgans
+binMarkersToGeneticMap=function(Gr, gmap, bin.size=5) {
+    gmapd=gmap[match(colnames(Gr), gmap$marker),]
+    gmapdc=split(gmapd, gmapd$chrom)
+    gmap.max=sapply(gmapdc, function(x) ceiling(max(x$map)))
+    mbin=0
+    #bin.size=5
+    for(cc in chroms) {
+        fib=findInterval(gmapdc[[cc]]$map,seq(0,gmap.max[[cc]]+(bin.size-gmap.max[[cc]]%%bin.size),bin.size))
+        gmapdc[[cc]]$cm5bin=fib+mbin
+        mbin=max( gmapdc[[cc]]$cm5bin )
+    }
+    gmapd=rbindlist(gmapdc)
+    return(gmapd)
 }
 
 
-getFDRfx=function(LODr,LODperm, cisMarkers){
+# given a statistic that increases as a function significance 
+# and the same statistic calculated from permutations
+# and a table that maps transcripts to the closest marker for each transcript
+# calculate functions that map the statistic to FDR
+getFDRfx=function(LODr,LODperm, cisMarkers=NULL){
 
     max.obsLOD=rowMaxs(LODr, value=T) #apply(abs(rff),1,max)
-    cMsubset=cisMarkers[which(cisMarkers$transcript %in% rownames(LODr)),]
     
-    max.obsLODc=LODr[cbind(cMsubset$transcript, cMsubset$marker)]
-    vint=seq(0,max(max.obsLOD)+.05, .05)
+    vint=seq(0,max(max.obsLOD)+.01, .01)
     
     ll1=apply(LODperm,3,function(x) rowMaxs(x, value=T))
-    ll2=apply(LODperm,3, function(x) x[cbind(cMsubset$transcript, cMsubset$marker)])
-
 
     # global FDR  ---------------------------------------------------------------
     obsPcnt = sapply(vint, function(thresh) { sum(max.obsLOD>thresh) }   )
@@ -46,51 +69,53 @@ getFDRfx=function(LODr,LODperm, cisMarkers){
     #to make sure this is monotonic
     
     pFDR = rev(cummax(rev(pFDR)))
-    pFDR[1]=pFDR[1]-(1e-3)
-    g.fdrFX=approxfun(pFDR, vint, ties=mean)
-    g.rtoFDRfx=approxfun(vint,pFDR, ties=mean)
+    g.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
+    g.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
 
+    if(!is.null(cisMarkers)) {
+        # local FDR --------------------------------------------------------------------
+        #ll2=lapply(ll, function(x) x$cmax)
+        cMsubset=cisMarkers[which(cisMarkers$transcript %in% rownames(LODr)),]
+        max.obsLODc=LODr[cbind(cMsubset$transcript, cMsubset$marker)]
+        ll2=apply(LODperm,3, function(x) x[cbind(cMsubset$transcript, cMsubset$marker)])
 
-    # local FDR --------------------------------------------------------------------
-    #ll2=lapply(ll, function(x) x$cmax)
-    obsPcnt = sapply(vint, function(thresh) { sum(max.obsLODc>thresh) }   )
-    names(obsPcnt) = vint
-    
-    expPcnt = sapply(vint,  
-                 function(thresh) { 
-                     return(mean(apply(ll2,2,function(x) sum(x>thresh))))
-                 })
+        obsPcnt = sapply(vint, function(thresh) { sum(max.obsLODc>thresh) }   )
+        names(obsPcnt) = vint
+        
+        expPcnt = sapply(vint,  
+                     function(thresh) { 
+                         return(mean(apply(ll2,2,function(x) sum(x>thresh))))
+                     })
 
-    #expPcnt = sapply(vint,  
-    #             function(thresh) { 
-    #                 return(mean(sapply(ll2,function(x) sum(x>thresh))))
-    #             })
-    names(expPcnt) = vint 
-    pFDR = expPcnt/obsPcnt
-    
-    pFDR[is.na(pFDR)]=0
-    pFDR[!is.finite(pFDR)]=0
-    #to make sure this is monotonic
-    
-    pFDR = rev(cummax(rev(pFDR)))
-    pFDR[1]=pFDR[1]-(1e-3)
-    c.fdrFX=approxfun(pFDR, vint, ties=mean)
-    c.rtoFDRfx=approxfun(vint,pFDR, ties=mean)
-    #---------------------------------------------------------------------------------
+        names(expPcnt) = vint 
+        pFDR = expPcnt/obsPcnt
+        
+        pFDR[is.na(pFDR)]=0
+        pFDR[!is.finite(pFDR)]=0
+        #to make sure this is monotonic
+        
+        pFDR = rev(cummax(rev(pFDR)))
+        c.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
+        c.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
+        #---------------------------------------------------------------------------------
 
-    return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx,
-                c.fdrFX=c.fdrFX, c.rtoFDRfx=c.rtoFDRfx))
+        return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx,
+                    c.fdrFX=c.fdrFX, c.rtoFDRfx=c.rtoFDRfx))
+    }
+
+    return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx))
 }
 
 
 
 # get peaks from genomewide scan ------------------------------------------------------------
-getGlobalPeaks=function(rff, LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
+# also restructure table for ease of plotting 
+getGlobalPeaks=function( LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
     cPeaksT=list()
     for(cc in chroms) {
         print(cc)
-        moi=grep(paste0('^',cc,'_'), colnames(rff))
-        rS=rff[,moi]
+        moi=grep(paste0('^',cc,'_'), colnames(LODr))
+        rS=LODr[,moi]
         #mstat=apply(rS,1,max)
         mstat.pos=Rfast::rowMaxs(abs(rS),value=F) #1,which.max)
         lookup=cbind(1:length(mstat.pos), mstat.pos)
@@ -108,7 +133,7 @@ getGlobalPeaks=function(rff, LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
                              CI.l=CIs[,1],
                              CI.r=CIs[,2],
                              LOD=LODstat, 
-                             sbeta=mstat,
+                             #sbeta=mstat,
                              FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat) )
         cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
         cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
@@ -122,12 +147,7 @@ getGlobalPeaks=function(rff, LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
     cP$CI.r=as.character(cP$CI.r)
     cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
     cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
-    #cP$peakGpos=markerGR$gcoord[match(cP$peak.marker, colnames(rff))]
-    #cP$tGpos=transcript.data$gcoord[match(cP$transcript, transcript.data$wormbase_gene)]
-    #cP$peakLGpos=markerGR$gcoord[match(cP$CI.l, colnames(rff))]
-    #cP$peakRGpos=markerGR$gcoord[match(cP$CI.r, colnames(rff))]
-    #saveRDS(cP, file='/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks_filt.RDS')
-    #cP=readRDS('/data/single_cell_eQTL/elegans/results/XQTL_F4_2_jointPeaks_filt.RDS')
+  
     cP$tchr=transcript.data$chromosome_name[match(cP$transcript, transcript.data$wormbase_gene)]
     cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$wormbase_gene)]
     cP=cP[cP$tchr %in% c("X","V","IV","III","II","I"),]
@@ -137,12 +157,48 @@ getGlobalPeaks=function(rff, LODr,fdrfx.fc,markerGR,transcript.data, chroms) {
 }
 #---------------------------------------------------------------------------------------------------
 
-fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids='deviance') {
+
+
+# formula for calculating the negative binomial glm log likelihood 
+nbLL=function (y, mu, theta)  {
+    return( -sum ( (y + theta) * log(mu + theta) - y * log(mu) + lgamma(y + 1) - theta * log(theta) + lgamma(theta) - lgamma(theta + y) ))
+}
+
+# fast calculation of negative binomial LL across the genome if theta is known 
+domap=function(gn, ...) { 
+       theta.est=thetas[gn]
+       YY=Y[,gn]
+       nbn=negative.binomial(theta=theta.est,link='log')
+      
+       fnbrN=fastglmPure(DM, YY, family=nbn)
+       nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
+
+       LRS=rep(NA,ncol(Gsub))
+       names(LRS)=colnames(Gsub)
+
+       XXn=cbind(DM,1)
+       idx=1:ncol(Gsub)
+       for(gx in idx) { 
+           #colnames(Gsub)){
+           XXn[,7]=Gsub[,gx]
+           fnbrF=fastglmPure(XXn, YY,  family=nbn)
+           LRS[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+        }
+       return(LRS)
+}
+
+
+# fit a negative binomial model for each transcript including covariates and the closest 
+# marker to each transcript
+# use Rfast2::negbin.reg for computational efficiency
+# for very large theta estimates or model convergence failures
+# use mgcv::gam for more robust algorithm
+fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub) {
     mmp0=mmp1[,-1]
 
-    nbR=Yk
-    nbR[is.numeric(nbR)]=NA
-    #nbP=nbR
+    #nbR=Yk
+    #nbR[is.numeric(nbR)]=NA
+    ##nbP=nbR
 
     cisNB=list() 
     for(r in 1:nrow(cMsubset)){
@@ -151,7 +207,7 @@ fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids='deviance') {
         p=as.character(cMsubset$marker[r])
         cmodel=cbind(mmp0, Gsub[,p])
         nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
-        if(!is.na(nbr$info[4]) & (nbr$info[4]<100) ){
+        if(!is.na(nbr$info[4]) & (nbr$info[4]<100 & !is.na(nbr$info[3])) ){
              theta.est=nbr$info[4]
              coef.est=nbr$be[,1]
         } else {
@@ -162,9 +218,13 @@ fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids='deviance') {
         XX=cbind(mmp1, Gsub[,p])
         msize=ncol(XX)
         fnbrF=fastglm(XX, Yk[,gn], start=coef.est, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        ##pseudo r^2 statistics 
+        ##library(performance)
+        ##class(fnbrF)='glm'
+        ##r2(fnbrF)
         fnbrN=fastglm(mmp1,Yk[,gn], start=coef.est[-msize],  family=negative.binomial(theta=theta.est,link='log'), maxit=500)
-        if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
-        if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
+        #if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
+        #if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
         cisNB[[gn]]$transcript=gn
         cisNB[[gn]]$lmarker=p
         cisNB[[gn]]$theta=theta.est
@@ -172,45 +232,123 @@ fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids='deviance') {
         cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[msize])
         cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
         cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
-        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) #-2*(nmodel-plr)
+        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) 
+        #-2*(nmodel-plr)
         cisNB[[gn]]$fmodelBs=coef(fnbrF)
-        print(cisNB[[gn]])
+        #print(cisNB[[gn]])
     }
 
-    nbR.var=colVars(nbR)
-    nbR=nbR[,-which(is.na(nbR.var))]
-    
-    return(list(cisNB=cisNB, nbR=nbR))
+   # nbR.var=colVars(nbR)
+   # nbR=nbR[,-which(is.na(nbR.var))]
+    return(cisNB) #, nbR=nbR))
 }
 
-fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, cMsubset,sig=.1 ) {
+fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
         tcPsig=data.frame(tcP[tcP$FDR<sig,])
         tcPsig$negbin.beta=NA
         tcPsig$negbin.se=NA
-        tcPsig$LLik=NA
-        tcPsig$negbin.LRS=NA
+        #tcPsig$LLik=NA
+        #tcPsig$negbin.LRS=NA
         tcPsig$negbin.p=NA
         #mmp0=mmp1[,-1]
         for(r in 1:nrow(tcPsig)){
             print(r)
             gn=as.character(tcPsig[r,]$transcript)
-            pcis=as.character(cMsubset$marker[match(gn, cMsubset$transcript)])
+            #pcis=as.character(cMsubset$marker[match(gn, cMsubset$transcript)])
             pmarker=as.character(tcPsig[r,]$peak.marker)
             theta.est=cisNB[[gn]]$theta
-            nmLLik=cisNB[[gn]]$LLik
-            XX=cbind(mmp1, Gsub[,pcis], Gsub[,pmarker])
+            #nmLLik=cisNB[[gn]]$LLik
+            XX=cbind(mmp1, Gsub[,pmarker])
             msize=ncol(XX)
             fnbrF=fastglm(XX, Yk[,gn],family=negative.binomial(theta=theta.est,link='log'), maxit=500)
             tcPsig$negbin.beta[r]=as.numeric(coef(fnbrF)[msize])
             tcPsig$negbin.se[r]=as.numeric(fnbrF$se[msize])
-            tcPsig$LLik[r]=as.numeric(logLik(fnbrF))
-            tcPsig$negbin.LRS[r]=as.numeric(-2*(nmLLik-logLik(fnbrF)))
-            tcPsig$negbin.p[r]=pchisq( tcPsig$negbin.LRS[r],1, lower.tail=F) #-2*(nmodel-plr)
+            tcPsig$negbin.p[r]=pchisq((2*log(10))*tcPsig[r,]$LOD,1, lower.tail=F)
+            #tcPsig$LLik[r]=as.numeric(logLik(fnbrF))
+            #tcPsig$negbin.LRS[r]=as.numeric(-2*(nmLLik-logLik(fnbrF)))
+            #pchisq( tcPsig$negbin.LRS[r],1, lower.tail=F) #-2*(nmodel-plr)
             print(tcPsig[r,])
         }
         return(tcPsig)
     }
 
+# calculate hotspots given a binning of genetic map to 
+getHotspots=function(tcP, gmapd, fdr.thresh=.05) {
+
+    ####### identify hotspots 
+    cPsig=tcP[tcP$FDR<fdr.thresh,] 
+    cPsig.nocis=cPsig[cPsig$tchr!=cPsig$chr,]
+    cPsig.nocis$bin=gmapd$cm5bin[match(cPsig.nocis$peak.marker, gmapd$marker)]
+    
+    bcount=data.frame(values=1:max(gmapd$cm5bin), lengths=0)
+
+    bcountr=rle(sort(cPsig.nocis$bin))
+    bcount$lengths[bcountr$values]=bcountr$lengths
+    #bcount=data.frame(values=bcount$values, lengths=bcount$lengths)
+    #bcount.holder$lengths[
+
+    gmapdc=split(gmapd, gmapd$chrom)
+
+    sig.hp=qpois(1-(.05/max(gmapd$cm5bin)),ceiling(mean(bcount$lengths)))+1 
+    print(sig.hp)
+    gcm=t(sapply(gmapdc, function(x) range(x$cm5bin)))
+    bcount$chr=rep(chroms, (1+gcm[,2]-gcm[,1]))
+    bcount$sig=bcount$lengths>sig.hp
+
+    bcounts=split(bcount,bcount$chr)
+
+    #automate peak detection
+    bcl=lapply(bcounts, function(x) {
+           f=findpeaks(x$lengths,minpeakheight=sig.hp, minpeakdistance=3, nups=0)[,2]
+           x$peaks=FALSE
+           x$peaks[f]=T
+           x$peaks[x$sig==F]=F
+           return(x)  })
+    hotspot.bins=unlist(sapply(bcl, function(x) x$values[x$peaks]))
+    cpb=cPsig.nocis[cPsig.nocis$bin %in% as.vector(unlist(hotspot.bins)), ]
+    cpbs=split(cpb, cpb$bin)
+    hotspot.markers=as.character(sapply(cpbs, function(x) names(which.max(table(x$peak.marker)))))
+    return(list(hotspot.markers=hotspot.markers,bin.counts=bcl, hotspot.linkages=cpbs))
+}
+
+# note use performance::r2() for pseudo r^2, convert fastglm to glm  
+
+
+
+getMeff_Li_and_Ji=function(cor.mat) {
+    evals = eigen(cor.mat,symmetric=T)$values
+    M = length(evals)
+    L = M-1
+    # Equation 5 from Li 
+    intevals=ifelse(evals>=1, 1, 0)
+    # modification for negative eigenvalues JB
+    # add up the contribution of fractional eigenvalues 
+    nonintevals=evals[evals>0]-floor(evals[evals>0]) #[evals>0]
+    Meff.li=sum(intevals)+sum(nonintevals)
+    print(Meff.li)
+    return(Meff.li)
+}
+
+getFDRmeff=function(pvec,q=.05,Meff) {
+#find  the max i, where observed p-value is less than 
+pvec < (q/Meff+(((i-1)/(M-1))*(q-(q/Meff))))
+}
+
+#functions for computing multivariate scan 
+mvn.scanone=function(g.s, Y,add.cov=NULL, roi1=NULL) {
+           ldetRSSf.1=rep(NA, ncol(g.s))
+           if(!is.null(roi1)) { ss=roi1 } else { ss=1:ncol(g.s) } 
+           for(i in min(ss):max(ss)) {
+               #ldetRSSf.1[i]=det_AtA(residuals(.lm.fit(as.matrix(g.s[,i]), Y)))
+               if(is.null(add.cov) ) {
+                RSSf.1=crossprod(residuals(.lm.fit(as.matrix(g.s[,i]), Y)))
+               } else {
+                RSSf.1=crossprod(residuals(.lm.fit(cbind(add.cov, g.s[,i]), Y)))
+               }
+               ldetRSSf.1[i]=determinant(RSSf.1, logarithm=T)$modulus
+           }
+           return(ldetRSSf.1)
+}
 
 
 
@@ -223,13 +361,7 @@ fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, cMsubset,sig=.1 ) {
 
 
 
-
-
-
-
-
-
-
+# THESE FUNCTIONS BELOW ARE NO LONGER BEING USED ....========================================================
 
 
 #tcP_nb=negbinRefit(tcP, Yk, mmp0, fdr.thresh=.1)
@@ -270,11 +402,6 @@ negbinNullDev=function(tnames, Yk, mmp1, nbM0, covs, threshold=100) { #0,m.to.th
 }
 
 
-
-
-
-
-
 negbinNull=function(tnames, Yk, mmp1){
     nbregs=list()  
     for(gn in tnames){
@@ -283,6 +410,7 @@ negbinNull=function(tnames, Yk, mmp1){
       }
     return(nbregs)
 }
+
 #use theta.ml trick and poisson regression for speedup here
 negbinNullP=function(tnames, Yk, mmp2){
     nbregs=list()  
@@ -464,94 +592,4 @@ cisNegbinFit=function(cMsubset, Yk, Gsub, mmp1, nbM0, sfit) {
 }
 
 
-getHotspots=function(tcP, gmapd, fdr.thresh=.05, pFDR=T) {
-
-    ####### identify hotspots 
-    if(pFDR) {
-        cPsig=tcP[tcP$FDR<fdr.thresh,] 
-    } else{
-        cPsig=tcP[tcP$FDR.negbin<fdr.thresh & tcP$FDR<fdr.thresh,]
-    }
-    
-    cPsig.nocis=cPsig[cPsig$tchr!=cPsig$chr,]
-    cPsig.nocis$cm5bin=gmapd$cm5bin[match(cPsig.nocis$peak.marker, gmapd$marker)]
-    
-    bcount=data.frame(values=1:max(gmapd$cm5bin), lengths=0)
-
-    bcountr=rle(sort(cPsig.nocis$cm5bin))
-    bcount$lengths[bcountr$values]=bcountr$lengths
-    #bcount=data.frame(values=bcount$values, lengths=bcount$lengths)
-    #bcount.holder$lengths[
-
-    gmapdc=split(gmapd, gmapd$chrom)
-
-    sig.hp=qpois(1-(.05/max(gmapd$cm5bin)),ceiling(mean(bcount$lengths)))+1 
-    print(sig.hp)
-    gcm=t(sapply(gmapdc, function(x) range(x$cm5bin)))
-    bcount$chr=rep(chroms, (1+gcm[,2]-gcm[,1]))
-    bcount$sig=bcount$lengths>sig.hp
-
-    bcounts=split(bcount,bcount$chr)
-
-    #automate peak detection
-    bcl=lapply(bcounts, function(x) {
-           f=findpeaks(x$lengths,minpeakheight=sig.hp, minpeakdistance=3, nups=0)[,2]
-           x$peaks=FALSE
-           x$peaks[f]=T
-           x$peaks[x$sig==F]=F
-           return(x)  })
-    hotspot.bins=unlist(sapply(bcl, function(x) x$values[x$peaks]))
-    cpb=cPsig.nocis[cPsig.nocis$cm5bin %in% as.vector(unlist(hotspot.bins)), ]
-    cpbs=split(cpb, cpb$cm5bin)
-    hotspot.markers=as.character(sapply(cpbs, function(x) names(which.max(table(x$peak.marker)))))
-    return(list(hotspot.markers=hotspot.markers, bin.counts=bcl))
-}
-
-mvn.scanone=function(g.s, Y,add.cov=NULL, roi1=NULL) {
-           ldetRSSf.1=rep(NA, ncol(g.s))
-           if(!is.null(roi1)) { ss=roi1 } else { ss=1:ncol(g.s) } 
-           for(i in min(ss):max(ss)) {
-               #ldetRSSf.1[i]=det_AtA(residuals(.lm.fit(as.matrix(g.s[,i]), Y)))
-               if(is.null(add.cov) ) {
-                RSSf.1=crossprod(residuals(.lm.fit(as.matrix(g.s[,i]), Y)))
-               } else {
-                RSSf.1=crossprod(residuals(.lm.fit(cbind(add.cov, g.s[,i]), Y)))
-               }
-               ldetRSSf.1[i]=determinant(RSSf.1, logarithm=T)$modulus
-           }
-           return(ldetRSSf.1)
-}
-
-# bin markers to genetic map 
-# bin. size is centimorgans
-binMarkersToGeneticMap=function(Gr, gmap, bin.size=5) {
-    gmapd=gmap[match(colnames(Gr), gmap$marker),]
-    gmapdc=split(gmapd, gmapd$chrom)
-    gmap.max=sapply(gmapdc, function(x) ceiling(max(x$map)))
-    mbin=0
-    #bin.size=5
-    for(cc in chroms) {
-        fib=findInterval(gmapdc[[cc]]$map,seq(0,gmap.max[[cc]]+(bin.size-gmap.max[[cc]]%%bin.size),bin.size))
-        gmapdc[[cc]]$cm5bin=fib+mbin
-        mbin=max( gmapdc[[cc]]$cm5bin )
-    }
-    gmapd=rbindlist(gmapdc)
-    return(gmapd)
-}
-
-
-    # no point keeping all this, just retain max stats 
-    #ll=replicate(nperm, {
-    #                 nind=sample(1:nrow(Yfe))
-    #                pme=abs(crossprod(Yfe[nind,],Gf)/(nrow(Yfe)-1))
-    #                lout=list(amax=rowMaxs(pme, value=T),
-    #                          cmax=pme[cbind(cMsubset$transcript, cMsubset$marker)] 
-    #                )
-    #                return(lout)
-    #    }, simplify=F )
-
-    #fix this ---- 
-#    llM=-nrow(Yfe)*log(1-ll$amax^2)/(2*log(10)) 
-#    llC=-nrow(Yfe)*log(1-ll$cmax^2)/(2*log(10))
-# ------------
 
