@@ -193,6 +193,20 @@ domap=function(gn, ...) {
 # use Rfast2::negbin.reg for computational efficiency
 # for very large theta estimates or model convergence failures
 # use mgcv::gam for more robust algorithm
+#gsubs=scale(Gsub)
+#sg=svd(gsubs)
+#um=sg$u
+#colnames(um)=paste0('X',seq(1,ncol(um)))
+
+#try not adding a size parameter 
+#test=glmpca(t(Yk), L=10, fam='nb', nb_theta=.1, X=m0)
+#emus=sapply(cisNB, function(x) x$emu)
+#disps=sapply(cisNB, function(x) x$theta)
+#ps=sapply(cisNB, function(x) x$negbin.p)
+#
+#dffe=data.frame(emus=emus, disps=disps, p=ps)
+#dffe=dffe[-which(dffe$disps>100),]
+
 fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub) {
     mmp0=mmp1[,-1]
 
@@ -242,6 +256,56 @@ fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub) {
    # nbR=nbR[,-which(is.na(nbR.var))]
     return(cisNB) #, nbR=nbR))
 }
+
+# experimental version using fixest::fenegbin()
+fitNBCisModelFE=function(cMsubset, mmp1, Yk, Gsub) {
+    mmp0=mmp1[,-1]
+
+    #nbR=Yk
+    #nbR[is.numeric(nbR)]=NA
+    ##nbP=nbR
+
+    dff=data.frame(batch=covs$Batch,ltotal=log(covs$total))
+    m0=model.matrix(dff$ltotal~dff$batch)
+    nmsize=ncol(m0)+1
+    cisNB=list() 
+    for(r in 1:nrow(cMsubset)){
+        print(r)
+        gn=as.character(cMsubset$transcript[r])
+        p=as.character(cMsubset$marker[r])
+        #cmodel=cbind(mmp0, Gsub[,p])
+        #nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
+        dff$cis=Gsub[,p]
+        dff$Y=Yk[,gn]
+        #fnbrF=feglm(Y~batch+cis, offset=dff$ltotal,data=dff,family='poisson',nthreads=24)
+        #fnbrN=feglm(Y~batch, offset=dff$ltotal,data=dff,family='poisson',nthreads=24)
+        
+        fnbrF=fenegbin(Y~batch+cis, offset=dff$ltotal,data=dff,nthreads=24)
+        # dffT=cbind(dff, um)
+        # fnbrT= update(fnbrF, ~.+X1+X2+X3+X4+X5+X6+X7+X8+X9+X10+X11+X12+X13+X14+X15+X16+X17+X18+X19+X20+X21+X22+X23+X24+X25, data=dffT)
+        coef.est=coef(fnbrF)[1:nmsize]
+        theta.est=coef(fnbrF)[nmsize+1]
+        # XX=cbind(m0, Gsub[,p])
+        # fnbrF=fastglm(XX, Yk[,gn], start=coef.est, offset=dff$ltotal, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        fnbrN=fastglm(m0,Yk[,gn], start=coef.est[-nmsize],  offset=dff$ltotal, family=negative.binomial(theta=theta.est,link='log'), maxit=100)
+        cisNB[[gn]]$transcript=gn
+        cisNB[[gn]]$lmarker=p
+
+        cisNB[[gn]]$theta=theta.est
+        cisNB[[gn]]$emu=mean(predict(fnbrF))
+
+        cisNB[[gn]]$negbin.beta=as.numeric(coef.est[nmsize])
+        cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[nmsize])
+        cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
+        cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
+        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) 
+        #-2*(nmodel-plr)
+        cisNB[[gn]]$fmodelBs=coef(fnbrF)
+    }
+    return(cisNB) 
+}
+
+
 
 fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
         tcPsig=data.frame(tcP[tcP$FDR<sig,])

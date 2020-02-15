@@ -22,6 +22,9 @@ registerDoMC(cores=ncores)
 # Data here from Josh (for running script and assessing output)
 # https://drive.google.com/drive/folders/1fCr9Xc3NUin0RO6hnaEWXkIgRXouLD-g?usp=sharing
 
+# This script should be run first, then mapping.R
+# this script should generate all the intermediate files necessary for mapping.R
+
 # various relevant data sets here
 reference.dir='/data/single_cell_eQTL/elegans/reference/'
 
@@ -234,7 +237,7 @@ runHMM(emissionProbs, hmm.out.dir, gmap.s, chroms[6],calc='genoprob', sex.chr.mo
 #--------------------------------------------------------------------------------------------------------
     
 
-
+#proceed with mapping.R
 
 
 
