@@ -60,35 +60,48 @@ ncounts= normalized_counts(monocle.data)
 fine.classification$total=colSums(counts)
 #---------------------------------------------------
 
-#replace classifications with new object
-#ctypes=readRDS('/data/single_cell_eQTL/elegans/reference/celltypeDataFrame_V3.rds')
-#replace broad tissue classification 
-#fine.classification$broad_tissue=ctypes@listData$broad_tissue
 
-#new classifications
-joint.covariates=data.frame(fine.classification)
-#all.equal(names(fine.classification$Size_Factor), colnames(counts))
-joint.covariates$barcode=colnames(counts)
+# Organizing information about tissue identity for each cell============================================================================================
+    joint.covariates=data.frame(fine.classification)
+    #all.equal(names(fine.classification$Size_Factor), colnames(counts))
+    joint.covariates$barcode=colnames(counts)
 
-all_broad=read.csv('/data/single_cell_eQTL/elegans/reference/classification/all_broad_pca_31oct.csv', stringsAsFactors=F)
-doublets=read.csv('/data/single_cell_eQTL/elegans/reference/classification/doublets_all_31oct.csv', stringsAsFactors=F)
-neuronal_pseudotimeE=read.csv('/data/single_cell_eQTL/elegans/reference/classification/neuronal_pseudotime_less_than50_31oct.csv', stringsAsFactors=F)
-neuronal_pseudotime=read.csv('/data/single_cell_eQTL/elegans/reference/classification/neuronal_pseudotime_31oct.csv', stringsAsFactors=F)
-joint.covariates$broad_tissue=NA
-joint.covariates$fine_tissue=NA
-joint.covariates$broad_tissue[match(all_broad$newid, joint.covariates$barcode)]=all_broad$broad_new
-joint.covariates$PC1=NA
-joint.covariates$PC2=NA
-joint.covariates$PC1[match(all_broad$newid, joint.covariates$barcode)]=all_broad$PC1
-joint.covariates$PC2[match(all_broad$newid, joint.covariates$barcode)]=all_broad$PC2
+    new_classifications=(colData(readRDS('/data/single_cell_eQTL/elegans/reference/classification/neuronalCDS.rds')))
+    new_classifications=data.frame(barcode=rownames(new_classifications), new_classifications, stringsAsFactors=F)
 
-# using Eyal neuron classifications
-joint.covariates$broad_tissue[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]='Neuron'
-joint.covariates$fine_tissue[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]=neuronal_pseudotimeE$fine
-joint.covariates$PC1[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]=neuronal_pseudotimeE$velocity_pseudotime
+    #classification files from James for tissue assignments, doublets and pca
+    all_broad=read.csv('/data/single_cell_eQTL/elegans/reference/classification/all_broad_pca_31oct.csv', stringsAsFactors=F)
+    doublets=read.csv('/data/single_cell_eQTL/elegans/reference/classification/doublets_all_31oct.csv', stringsAsFactors=F)
+
+    # neuronal classifications from eyal
+    neuronal_pseudotimeE=read.csv('/data/single_cell_eQTL/elegans/reference/classification/neuronal_pseudotime_less_than50_31oct.csv', stringsAsFactors=F)
+    neuronal_pseudotime=read.csv('/data/single_cell_eQTL/elegans/reference/classification/neuronal_pseudotime_31oct.csv', stringsAsFactors=F)
+
+    joint.covariates$broad_tissue=NA
+    joint.covariates$doublet=NA
+    joint.covariates$broad_tissue[match(all_broad$newid, joint.covariates$barcode)]=all_broad$broad_new
+    joint.covariates$doublet[match(doublets$barcode, joint.covariates$barcode)]=doublets$doublet
+    joint.covariates$PC1=NA
+    joint.covariates$PC2=NA
+    joint.covariates$PC1[match(all_broad$newid, joint.covariates$barcode)]=all_broad$PC1
+    joint.covariates$PC2[match(all_broad$newid, joint.covariates$barcode)]=all_broad$PC2
+    joint.covariates$broad_tissue[match(new_classifications$barcode, joint.covariates$barcode)]='Neuron'
+    joint.covariates$fine_tissue=NA
+    joint.covariates$fine_tissue[match(new_classifications$barcode, joint.covariates$barcode)]=new_classifications$fine_tissue
+    joint.covariates$broad_tissue[joint.covariates$doublet=='True']=NA
+    
+    ## previous fine neuron classifications 
+    #joint.covariates$broad_tissue[match(doublets$barcode, joint.covariates$barcode)]=doublets$predicted_cluster    
+    ##joint.covariates$broad_tissue[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]='Neuron'
+    ##joint.covariates$PC1[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]=neuronal_pseudotimeE$velocity_pseudotime
+    ##joint.covariates$fine_tissue=NA
+    ##joint.covariates$fine_tissue[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]=neuronal_pseudotimeE$fine
+    ###joint.covariates$PC1[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)]=neuronal_pseudotimeE$velocity_pseudotime
+#=========================================================================================================================================================
 
 
-#get transcript annotations and put counts in genomic order -------------------
+
+#get transcript annotations and put counts in genomic order ==========================================================
     transcript.data=rowData(monocle.data)
     transcript.annotations=import(paste0(reference.dir, 'genes.gtf'))
     cgenes=transcript.annotations[transcript.annotations$type=='gene',]
@@ -110,8 +123,8 @@ joint.covariates$PC1[match(neuronal_pseudotimeE$newid, joint.covariates$barcode)
     ncounts=ncounts[gene.reorder,]
     transcript.data=transcript.data[gene.reorder,]
 saveRDS(transcript.data, file=paste0(reference.dir, 'transcriptData.RDS'))
+#===================================================================================================================
 
-#------------------------------------------------------------------------------
 
 # genetic map (this is for 10 generations) ------------------------------------
     gmap=readRDS(paste0(reference.dir, 'geneticMapXQTLsnplist.rds'))

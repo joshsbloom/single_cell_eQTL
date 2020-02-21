@@ -7,16 +7,12 @@ library(parallel)
 library(Rfast)
 library(Rfast2)
 library(data.table)
-
 library(ggplot2)
 library(ggsci)
-
 library(pracma)
-
 library(MASS)
 library(mgcv)
 library(fastglm)
-
 library(caret)
 library(parallel)
 library(abind)
@@ -90,8 +86,8 @@ cisMarkers=na.omit(cisMarkers)
 pte=apply(Yr, 2, function(x) sapply(split(x, joint.covariates$broad_tissue), function(y) sum(y>0)))
 t.cutoff20=20
 is.expressed20=apply(pte,2,function(x) x>t.cutoff20)
-#saveRDS(is.expressed20, file=paste0(data.strucutres.dir, 'expressed_in_20_cells_broad_tissue.RDS')) 
-is.expressed20=readRDS(paste0(data.strucutres.dir, 'expressed_in_20_cells_broad_tissue.RDS'))
+saveRDS(is.expressed20, file=paste0(data.structures.dir, 'expressed_in_20_cells_broad_tissue.RDS')) 
+#is.expressed20=readRDS(paste0(data.strucutres.dir, 'expressed_in_20_cells_broad_tissue.RDS'))
 
 # would probably benefit from harsher filter here
 expressed.transcripts=names(which(colSums(is.expressed20)>0))
@@ -133,11 +129,11 @@ LPmatrix=list()
 # within tissue analysis for closest marker to each transcript, separate structure for fine tissue categories
 tissueCisNBFine=list()
 
-dir.create(paste0(data.strucures.dir, '/broad/'))
-dir.create(paste0(data.strucures.dir, '/fine/'))
+dir.create(paste0(data.structures.dir, '/broad/'))
+dir.create(paste0(data.structures.dir, '/fine/'))
 
 # Map within each tissue  
-for(kk in seq_along(cty)) { 
+for(kk in which(cty=='fine') ) { #seq_along(cty)) { 
     print(kk)
     uc=types[kk]
     print(uc)
@@ -150,7 +146,7 @@ for(kk in seq_along(cty)) {
         print('broad')
     }
     if(cty[kk]=='fine') {
-        tk=which(joint.covariates$fine_tissue==uc & !is.na(joint.covariates$PC1))
+        tk=which(joint.covariates$fine_tissue==uc) # !is.na(joint.covariates$PC1))
         dout=paste0(data.structures.dir, '/fine/', uc, '/')
         print('fine')
     }
@@ -399,7 +395,7 @@ cisResultsFine=lapply(cisResultsFine, function(x) {
                       return(y)
                       })
 
-saveRDS(cisResultsFine, paste0(data.structures.dir. 'perFineTissue_cisOnly.RDS'))
+saveRDS(cisResultsFine, paste0(data.structures.dir, 'perFineTissue_cisOnly.RDS'))
 #----------------------------------------------------------------------------------------------
 
 
