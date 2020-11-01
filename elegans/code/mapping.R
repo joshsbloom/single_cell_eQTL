@@ -217,7 +217,7 @@ for(kk in which(cty=='fine') ) { #seq_along(cty)) {
 
     #permute within batch
     LODpL=list()
-    for(i in 1:5) { 
+    for(i in 1:10) { 
         print(i)
         new.index=as.vector(do.call('c', sapply(split(seq_along(covs$Batch), as.character(covs$Batch)), sample)))
         Ykp=Matrix(Yk[new.index,], sparse=T)
