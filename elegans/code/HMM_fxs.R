@@ -12,11 +12,11 @@ map2rf = function(map, tol=1e-12) {
 }
 
 # forward algorithm
-calcForward=function(eMats, tMats, lik=F) {
-
-    if(nrow(eMats)==3){ startProbs=c(.25,.5,.25) }
-    if(nrow(eMats)==2){ startProbs=c(.5,.5)      }
-
+calcForward=function(eMats, tMats, startProbs=NULL,lik=F) {
+    if(is.null(startProbs)){
+        if(nrow(eMats)==3){ startProbs=c(.25,.5,.25) }
+        if(nrow(eMats)==2){ startProbs=c(.5,.5)      }
+    }
     emissionProbs=eMats
     nObservations=ncol(eMats)
     nStates=nrow(eMats)
@@ -78,10 +78,11 @@ calcBackward=function(eMats, tMats) {
 }
 
 #viterbi path
-viterbi=function (eMats, tMats) {
-    if(nrow(eMats)==3){ startProbs=c(.25,.5,.25) }
-    if(nrow(eMats)==2){ startProbs=c(.5,.5)      }
-
+viterbi=function (eMats, tMats, startProbs=NULL) {
+     if(is.null(startProbs)){
+        if(nrow(eMats)==3){ startProbs=c(.25,.5,.25) }
+        if(nrow(eMats)==2){ startProbs=c(.5,.5)      }
+    }
     emissionProbs=eMats
     nObservations=ncol(eMats)
     nStates=nrow(eMats)
