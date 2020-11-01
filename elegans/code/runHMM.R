@@ -31,7 +31,8 @@ runHMM=function(emissionProbs, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.i
         tMats=lapply(g.rf, mTmat)
 
         #double check this 
-        if(sex.chr){ tMats=lapply(g.rf, mTmatH) }
+        #if(sex.chr){ tMats=lapply(g.rf, mTmatH) }
+        if(sex.chr){ startProbs=c(.44,.44,.11) } else {startProbs=NULL } 
 
         #initialize storage for posterior probabilities
         split.indiv=cut(1:n.indiv, ncores) 
@@ -44,7 +45,7 @@ runHMM=function(emissionProbs, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.i
                                    dimnames=list(id=cell.names[indiv.oi],
                                                  geno=c('AA','AB', 'BB'),
                                                  markers=names(gdist)) )
-                if(sex.chr) {posteriorProb=posteriorProb[,-2,] }
+                #if(sex.chr) {posteriorProb=posteriorProb[,-2,] }
                 lik.vec=rep(NA,length(indiv.oi))
                 names(lik.vec)=cell.names[indiv.oi]
             }  
@@ -61,16 +62,18 @@ runHMM=function(emissionProbs, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.i
                 eMats=rbind(indRR,indHet,indAA)
                 ess=colSums(eMats)
                 eMats[,ess<1e-12]=1
-                if(sex.chr) {eMats=eMats[-2,]}
+                #if(sex.chr) {eMats=eMats[-2,]}
 
                 if(calc=='genoprob') {
-                    f=calcForward(eMats,tMats)
+                    #print(startProbs)
+                    f=calcForward(eMats,tMats,startProbs)
                     b=calcBackward(eMats,tMats)
                     posteriorProb[cell.names[indiv],,]=calcPosterior(f,b)
                     if(lik) { lik.vec[cell.names[indiv]]=calcForward(posteriorProb[cell.names[indiv],,],tMats,lik=T)}
                 }
                 if(calc=='viterbi') {
-                    test=viterbi(eMats,tMats)
+                    print(startProbs)
+                    test=viterbi(eMats,tMats,startProbs)
                     viterbiOut[cell.names[indiv],]=viterbi(eMats,tMats)
                  }
             }
@@ -90,7 +93,7 @@ runHMM=function(emissionProbs, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.i
                                    dimnames=list(id=cell.names[1:n.indiv],
                                                  geno=c('AA','AB', 'BB'),
                                                  markers=names(gdist))   )
-            if(sex.chr) {posteriorProb=posteriorProb[,-2,] }
+            #if(sex.chr) {posteriorProb=posteriorProb[,-2,] }
 
             # and then fill it up manually with a loop
             for(n in 1:length(pp)) {
