@@ -1,30 +1,30 @@
-library(Matrix)
-library(data.table)
-library(qtl)
-library(qtl2)
-library(parallel)
-library(Rfast)
-library(seqinr)
-library(GenomicRanges)
-#library("BSgenome.Scerevisiae.UCSC.sacCer3")
-library(foreach)
-library(doMC)
-library(ggplot2)
-library(vcfR)
-library(monocle)
-library(matrixStats)
-library(spam)
-
+#library(Matrix)
+#library(data.table)
+#library(qtl)
+#library(qtl2)
+#library(parallel)
+#library(Rfast)
+#library(seqinr)
+#library(GenomicRanges)
+##library("BSgenome.Scerevisiae.UCSC.sacCer3")
+#library(foreach)
+#library(doMC)
+#library(ggplot2)
+#library(vcfR)
+#library(monocle)
+#library(matrixStats)
+#library(spam)
+#
 library(glmmTMB)
 library(broom.mixed)
 library(foreach)
 library(doMC)
 library(dplyr)
-# for parallelizing the HMM
 
 code.dir='/data/single_cell_eQTL/yeast/code/'
 reference.dir='/data/single_cell_eQTL/yeast/reference/'
 data.base.dir='/data/single_cell_eQTL/yeast/processed/'
+results.base.dir='/data/single_cell_eQTL/yeast/results/'
 
 source(paste0(code.dir, 'rqtl.R'))
 source(paste0(code.dir, 'getGenoInformativeCounts.R'))
@@ -53,18 +53,32 @@ dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, 
 dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
 #overwrite dip.Assignments to include likelihood, counts, and umap
 dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, by='barcode'), dip.specificCounts)
+dir.create(paste0(results.base.dir,experiment.name))
+saveRDS(dip.Assignments, paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
 
 for(dip in input.diploids) {
     dip='A'
     phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
     bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data)
+    nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data)
+    saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+    saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+
 }
 
 
 
+aseElife=gdata::read.xls('/data/single_cell_eQTL/yeast/reference/elife-35471-data7-v2_ASE_results.xlsx')
 
+bbin.model.results %>% filter(term=='(Intercept)')
+test=left_join(aseElife, bbin.model.results %>% filter(term=='(Intercept)'), by='gene')
+plot(log2(exp(test$estimate)),test$log2ASEFoldChange)
 
+test=left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='cond'), by='gene')
+plot(log2(exp(test$estimate)),test$log2ASEFoldChange)
 
+test=left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='disp'), by='gene')
+plot(-log2(exp(test$estimate)),test$log2ASEFoldChange)
 
 rMat=phasedCounts[[1]] #ref.ASEcounts #do.call('cbind', ref.ASEcounts)
 aMat=phasedCounts[[2]] #alt.ASEcounts # do.call('cbind', alt.ASEcounts)
@@ -81,7 +95,6 @@ totAcounts=rowSums(aMat)
 totGcounts=colSums(rMat+aMat)
 
 A_R=colSums(aMat)/colSums(rMat)
-aseElife=gdata::read.xls('/data/single_cell_eQTL/yeast/reference/elife-35471-data7-v2_ASE_results.xlsx')
 raw.ratio=data.frame(gene=names(A_R), ratio=as.vector(A_R),sum=totGcounts)
 #library(tidyverse)
 test=left_join(aseElife, raw.ratio, by='gene')

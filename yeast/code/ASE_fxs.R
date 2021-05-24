@@ -6,22 +6,22 @@ library(data.table)
 library(vcfR)
 
 crosses.to.parents=list(
-     '375'=c("M22", "BYa"),
-     'A'  =c("BYa", "RMx"),
-     '376'=c("RMx", "YPS163a"),
-     'B'  =c("YPS163a", "YJM145x"),
-     '377'=c("YJM145x", "CLIB413a"),
-     '393'=c("CLIB413a", "YJM978x"),
-     '381'=c("YJM978x", "YJM454a"),
-    '3008'=c("YJM454a", "YPS1009x"),
-    '2999'=c("YPS1009x", "I14a"),
-    '3000'=c("I14a", "Y10x"),
-    '3001'=c("Y10x", "PW5a"),
-    '3049'=c("PW5a", "273614xa"),
-    '3003'=c("273614xa", "YJM981x"),
-    '3004'=c("YJM981x", "CBS2888a"),
-    '3043'=c("CBS2888a", "CLIB219x"),
-    '3028'=c("CLIB219x", "M22")
+     '375'=c("M22", "BYa"),           #1
+     'A'  =c("BYa", "RMx"),           #2
+     '376'=c("RMx", "YPS163a"),       #3
+     'B'  =c("YPS163a", "YJM145x"),   #4
+     '377'=c("YJM145x", "CLIB413a"),  #5
+     '393'=c("CLIB413a", "YJM978x"),  #6
+     '381'=c("YJM978x", "YJM454a"),   #7
+    '3008'=c("YJM454a", "YPS1009x"),  #8
+    '2999'=c("YPS1009x", "I14a"),     #9
+    '3000'=c("I14a", "Y10x"),         #10
+    '3001'=c("Y10x", "PW5a"),         #11
+    '3049'=c("PW5a", "273614xa"),     #12
+    '3003'=c("273614xa", "YJM981x"),  #13
+    '3004'=c("YJM981x", "CBS2888a"),  #14
+    '3043'=c("CBS2888a", "CLIB219x"), #15
+    '3028'=c("CLIB219x", "M22")       #16
     )
 chroms=paste0('chr', as.roman(1:16)) 
 
@@ -383,7 +383,8 @@ tidyDisp=function(m){
     ctable=(coef(summary(m))$disp)
     colnames(ctable)=c('estimate', 'std.error', 'statistic', 'p.value')
     ctable=tibble(data.frame(effect='fixed', component='disp', term=rownames(ctable), 
-                      ctable, conf.low=NA, conf.high=NA, stringsAsFactors=F))
+                      ctable,  stringsAsFactors=F))
+    #conf.low=NA, conf.high=NA,
     return(ctable)
 }
 
@@ -416,15 +417,18 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         ef=ef
         )
 
+  if(!is.null(reduced.gene.set)){
+    genes.to.test=genes.to.test[genes.to.test %in% reduced.gene.set]
+  }
 
-  nbin=mclapply(genes.to.test[1:48], 
+  nbin=mclapply(genes.to.test, 
    function(g, ... ){
         print(g)
         #r=rMat[cells.to.keep,g]
         #a=aMat[cells.to.keep,g]
         #efs=experiment.factor[paroi][numi[paroi]<5000]
         #y=c(r,a)#[numi
-        y=c(p2[,g],p1[,g])
+        y=c(p1[,g],p2[,g])
         cellIDf=setup.vars$cellIDf
         of2=setup.vars$of2
         geno=setup.vars$geno
@@ -442,7 +446,7 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         result$gene = g
         if(!is.na(logLik(m))) {
             result$stats=glance(m)
-            result$coefs.cond= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=T)
+            result$coefs.cond= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
             result$coefs.disp= tidyDisp(m)
 
         }
