@@ -9,14 +9,14 @@ library(GenomicRanges)
 #library("BSgenome.Scerevisiae.UCSC.sacCer3")
 library(foreach)
 library(doMC)
-library(glmmTMB)
 library(ggplot2)
 library(vcfR)
 library(monocle)
 library(matrixStats)
 library(spam)
 
-
+library(glmmTMB)
+library(broom.mixed)
 library(foreach)
 library(doMC)
 library(dplyr)
@@ -36,17 +36,18 @@ source(paste0(code.dir, 'runHMM_custom.R'))
 #load custom functions for processing ASE data 
 source(paste0(code.dir, 'ASE_fxs.R'))
 
-sgd.genes=getSGD_Gene_Intervals(reference.dir)
+sgd.genes=getSGD_GeneIntervals(reference.dir)
 
-experiment.name='12_Group_1_diploids_3004_2444_3051_5k_Feb_21/'
+experiment.name='12_Group_1_diploids_3004_2444_3051_5k_Feb_21'
 
 #order matters here for counting diploid specific variants, so proceed carefully
 input.diploids=names(crosses.to.parents)[c(2,4,14)]
+print(input.diploids)
 
-data.dir=paste0(data.base.dir, experiment.dir)
+data.dir=paste0(data.base.dir, experiment.name, '/')
 
 #vname=paste0(variants[[1]],'_', variants[[2]])
-ase.Data=buildASE_data(data.dir)
+ase.Data=buildASE_data(data.dir, experiment.name)
 
 dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, ncores=8)
 dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
@@ -56,6 +57,7 @@ dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, 
 for(dip in input.diploids) {
     dip='A'
     phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
+    bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data)
 }
 
 
