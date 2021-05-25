@@ -38,33 +38,50 @@ source(paste0(code.dir, 'ASE_fxs.R'))
 
 sgd.genes=getSGD_GeneIntervals(reference.dir)
 
-experiment.name='12_Group_1_diploids_3004_2444_3051_5k_Feb_21'
+experiments=list(
+    '12_Group_1_diploids_3004_2444_3051_5k_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
+    '13_Group1_diploids_3004_2444_3051_7point5K_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
+    '14_GP1_3004_3051_274_375_May10'=names(crosses.to.parents)[c(1,2,4,14)],
+    '15_GP2_376_377_393_3008_May10'=names(crosses.to.parents)[c(3,5,6,8)],
+    '16_GP3_2999_3000_3001_3049_May10'=names(crosses.to.parents)[c(9,10,11,12)],
+    '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(7,13,15,16)])
 
-#order matters here for counting diploid specific variants, so proceed carefully
-input.diploids=names(crosses.to.parents)[c(2,4,14)]
-print(input.diploids)
+for(experiment.name in names(experiments)){
+    input.diploids=experiments[[experiment.name]]
+    print(input.diploids)
+    #for output 
+    dir.create(paste0(results.base.dir,experiment.name))
+    data.dir=paste0(data.base.dir, experiment.name, '/')
 
-data.dir=paste0(data.base.dir, experiment.name, '/')
+    #vname=paste0(variants[[1]],'_', variants[[2]])
+    ase.Data=buildASE_data(data.dir, experiment.name)
+    saveRDS(ase.Data, paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
 
-#vname=paste0(variants[[1]],'_', variants[[2]])
-ase.Data=buildASE_data(data.dir, experiment.name)
+    dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, ncores=8)
+    dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
+    #overwrite dip.Assignments to include likelihood, counts, and umap
+    dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, by='barcode'), dip.specificCounts)
+    saveRDS(dip.Assignments, paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
 
-dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, ncores=8)
-dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
-#overwrite dip.Assignments to include likelihood, counts, and umap
-dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, by='barcode'), dip.specificCounts)
-dir.create(paste0(results.base.dir,experiment.name))
-saveRDS(dip.Assignments, paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+    for(dip in input.diploids) {
+        #dip='A'
+        phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
+        saveRDS(phasedCounts, file=paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
 
-for(dip in input.diploids) {
-    dip='A'
-    phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
-    bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data)
-    nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data)
-    saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
-    saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+        bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data)
+        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+        
+        nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data)
+        saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
 
+    }
 }
+
+
+
+
+
+
 
 
 
@@ -78,7 +95,7 @@ test=left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component
 plot(log2(exp(test$estimate)),test$log2ASEFoldChange)
 
 test=left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='disp'), by='gene')
-plot(-log2(exp(test$estimate)),test$log2ASEFoldChange)
+plot(log2(exp(test$estimate)),test$log2ASEFoldChange)
 
 rMat=phasedCounts[[1]] #ref.ASEcounts #do.call('cbind', ref.ASEcounts)
 aMat=phasedCounts[[2]] #alt.ASEcounts # do.call('cbind', alt.ASEcounts)
