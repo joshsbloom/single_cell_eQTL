@@ -127,7 +127,6 @@ data.dirs=paste0(base.dir, 'processed/', experiments, '/')
 het.across.cells.threshold=.1
               
               
-              
 #              '1_2444_44_1-2', '2_2444_44-', '3_ByxRM_51-_1-2', 
 #              '4_ByxRM_51-', '0_BYxRM_480MatA_1', '0_BYxRM_480MatA_2')
 #cdesig=c('B','B', 'A', 'A', 'A', 'A')
@@ -346,12 +345,6 @@ domap=function(gn, ...) {
 }
 
 
-cl <- makeCluster(36)
-clusterEvalQ(cl, {
-       library(fastglm)
-       library(Matrix)
-       library(MASS) 
-       NULL  })
 
 
 #cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
@@ -392,13 +385,21 @@ getCisMarker=function(sgd.genes, m.granges, counts) {
     #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
 }
 
-doCisNebula=function(gn,...){
-        mmpN=cbind(mmp1, Gsub[,cSplit[[gn]]$marker[1]])
-        yind=match(cSplit[[gn]]$transcript, rownames(counts))
+doCisNebula2=function(x,...) { # mmp1,counts,Gsub){
+        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
+        yind=match(x$transcript, rownames(counts))
         NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
         NBcis$summary$gene=rownames(counts)[yind]
         return(NBcis)
-}
+    }
+
+cl <- makeCluster(64)
+clusterEvalQ(cl, {
+       library(fastglm)
+       library(Matrix)
+       library(MASS) 
+       library(nebula)
+       NULL  })
 
 
 nUMI_thresh=10000
@@ -448,6 +449,7 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     rm(pruned)
     
     # af diagnostic    
+    print("making diagonstic plots")
     png(file=paste0(results.dir, 'seg_diagnostic_af_plot.png'), width=1024,height=1024)
     par(mfrow=c(2,1))
     plot(m.granges$gcoord, colSums(vg)/sum(classification), ylim=c(0,1), xlab='mpos', ylab='fraction of segs that are parent 2', 
@@ -487,9 +489,10 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
 
     mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts))))
     cSplit=split(cisMarkers, cisMarkers$marker)
-    #dispatch is slower than execute 
-    clusterExport(cl, varlist=c("mmp1", "Gsub", "cSplit", "counts","doCisNebula", "nebula"))
-    cisNB=parLapply(cl, names(cSplit), doCisNebula)
+   
+    print("calculating dispersions")
+    clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
+    system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
     names(cisNB)=names(cSplit)
 
     #cisNB=mclapply(cSplit, function(x,...) {
@@ -504,7 +507,7 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
 
     png(file=paste0(results.dir, 'cis_p_hist.png'), width=512,height=512)
-    hist(cis.ps,breaks=50, main=experiment, sub=sum(p.adjust(cis.ps,'fdr')<.05))
+    hist(cis.ps,breaks=50, main=paste(experiment, 'n cells=', nrow(Yr)) , sub=sum(p.adjust(cis.ps,'fdr')<.05))
     dev.off()
 
     #here we define covariates 
@@ -521,7 +524,7 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     thetas=dispersion.df$theta.cis
     names(thetas)=dispersion.df$gene
 
-    print('Calculating LODs')
+    print('calculating LODs')
     #Yks=Matrix(Yr, sparse=T)
     clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
     clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
