@@ -254,28 +254,14 @@ standardise2 <- function (x, center = TRUE, scale = TRUE) {
 
 source(paste0(code.dir, 'ASE_fxs.R'))
 
-sgd.genes=getSGD_GeneIntervals(reference.dir)
-#overwrite 
-getCisMarker=function(sgd.genes, m.granges, counts) {
-    Yre=t(counts)
-    markerGR=m.granges
-    sgd.genes=sgd.genes[match(colnames(Yre), sgd.genes$gene_id),]
-    tag=sgd.genes
-
-    cisMarkers=data.frame(transcript=sgd.genes$gene_id, 
-                          marker=m.granges$sname[nearest(tag,markerGR)],
-                          stringsAsFactors=F)
-    cisMarkers=na.omit(cisMarkers)
-    return(cisMarkers)
-    #indices of cis eQTL in 
-    #rows are transcripts, columns are markers
-    #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
-}
-
 library(mgcv)
 library(Rfast2)
 library(fastglm)
 library(MASS)
+library(irlba)
+library(nebula)
+library(dplyr)
+
 fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids=NULL) {
     mmp0=mmp1[,-1]
 
@@ -368,25 +354,66 @@ clusterEvalQ(cl, {
        NULL  })
 
 
-cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
+#cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
 
 
-for(ee in c(1,2,4,7:12,16,16)) { #1:length(experiments)){
-    print(ee)
+LDprune=function(geno, m.granges, cor.cutoff=.999) {
+    G=standardise2(vg)
+    #prune markers 
+    chr.ind=split(1:length(m.granges), as.character(seqnames(m.granges)))
+    G.chr=lapply(chr.ind, function(x) G[,x])
+    Gcor.chr=lapply(G.chr, function(x) crossprod(x)/(nrow(x)-1))
+    fcm.chr=lapply(Gcor.chr, function(x) caret::findCorrelation(x,cutoff=cor.cutoff, verbose=F) )
+    fcm=as.vector(unlist(mapply(function(x,y) x[y],  sapply(G.chr, colnames), fcm.chr)))
+    m.to.keep=which(!colnames(vg)%in% fcm) #colnames(vg)[fcm])
+    Gsub=vg[,m.to.keep]
+    rm(Gcor.chr)
+    m.to.keep=match(colnames(Gsub), colnames(vg))
+    markerGRr=m.granges[m.to.keep]
+    return(list(Gsub=Gsub, markerGRr=markerGRr))
+}
+
+
+#overwrite these functions
+sgd.genes=getSGD_GeneIntervals(reference.dir)
+getCisMarker=function(sgd.genes, m.granges, counts) {
+    Yre=t(counts)
+    markerGR=m.granges
+    sgd.genes=sgd.genes[match(colnames(Yre), sgd.genes$gene_id),]
+    tag=sgd.genes
+
+    cisMarkers=data.frame(transcript=sgd.genes$gene_id, 
+                          marker=m.granges$sname[nearest(tag,markerGR)],
+                          stringsAsFactors=F)
+    cisMarkers=na.omit(cisMarkers)
+    return(cisMarkers)
+    #indices of cis eQTL in 
+    #rows are transcripts, columns are markers
+    #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
+}
+
+doCisNebula=function(gn,...){
+        mmpN=cbind(mmp1, Gsub[,cSplit[[gn]]$marker[1]])
+        yind=match(cSplit[[gn]]$transcript, rownames(counts))
+        NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
+        NBcis$summary$gene=rownames(counts)[yind]
+        return(NBcis)
+}
+
+
+nUMI_thresh=10000
+minInformativeCellsPerTranscript=128
+#for(ee in c(2,4,7:12,15,16)) { #1:length(experiments)){
+for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
+#for(ee in c(15,16)) { #1:length(experiments)){
+
     experiment=experiments[ee]
+    print(ee)
+    print(experiment)    
     #cross=crossL[[cdesig[ee]]]
     #parents=parentsL[[cdesig[ee]]]
     data.dir=data.dirs[ee]
     results.dir=paste0(base.dir, 'results/', experiment, '/')
- #   cell.cycle.classification.file=paste0(base.dir, cell.cycle.classification.dir, cell.cycle.classification.names[ee], '.cluster.assignments.txt')
- #   cell.cycle.annot.file=paste0(base.dir, cell.cycle.classification.dir, cell.cycle.classification.names[ee], '.cluster.annotations.txt')
-    # get cell cycle covariates
-#    cell.covariates=getCCinfo(cell.cycle.classification.file,cell.cycle.annot.file)
-    #note n gets smaller here due to cells missing classification
- #   cell.covariates=cell.covariates[!is.na(cell.covariates$cid),]
- #   print(experiment)
- #   print(nrow(cell.covariates))
- #   saveRDS(cell.covariates, paste0(results.dir, 'cell_covariates.RDS'))
 
     #read in transcript counts 
     counts=readRDS(paste0(results.dir, 'counts.RDS'))
@@ -398,80 +425,194 @@ for(ee in c(1,2,4,7:12,16,16)) { #1:length(experiments)){
     gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
     gmap.subset=gmapC[match(rownames(g.counts[[1]]), paste0(gmapC$chrom, '_', gmapC$ppos)),]
     gmap.ss=split(gmap.subset, gmap.subset$chrom) 
- 
-
+   
+    #get hmm genotype probs 
     vg=getSavedGenos(chroms, results.dir, type='genoprobs')
     m.granges=getMarkerGRanges(g.counts)
     m.granges$gcoord=gcoord.key[as.character(seqnames(m.granges))]+start(m.granges)
     m.granges$sname=colnames(vg)
 
+    #add additional hard filter for umis per cell
     classification = readRDS(paste0(results.dir, 'cellFilter.RDS'))
 
-  #  par(xaxs='i', yaxs='i')
-  #  plot(m.granges$gcoord, colSums(pg[rownames(pg)%in%rownames(vg),])/2727, ylim=c(0,1))
-  #  plot(m.granges$gcoord, colSums(vg[classification,]-1)/sum(classification), ylim=c(-1,1), xlab='mpos', ylab='af')
-  #  abline(v=gcoord.key, lty=2, col='lightblue')
-  #  cis.marker=getCisMarker(sgd.genes, m.granges, counts)
+    #add additional hard filter for umis per cell
+    classification = classification & colSums(counts)<nUMI_thresh
 
-     # assuming classification matches experiment, subset and propagate order across phenos and genos 
     #matches data to cell.covariates
     counts=counts[,names(classification)[classification]] #cell.covariates$barcode]
     vg=vg[names(classification)[classification],] #cell.covariates$barcode,]
+   
+    pruned=LDprune(vg, m.granges)
+    Gsub=pruned$Gsub
+    markerGRr=pruned$markerGRr
+    rm(pruned)
     
-    #af=apply(vg,2,function(x) sum(x==2)/nrow(vg))
-    #cyc1.cor=cor(vg[,which.max(af)], vg)
+    # af diagnostic    
+    png(file=paste0(results.dir, 'seg_diagnostic_af_plot.png'), width=1024,height=1024)
+    par(mfrow=c(2,1))
+    plot(m.granges$gcoord, colSums(vg)/sum(classification), ylim=c(0,1), xlab='mpos', ylab='fraction of segs that are parent 2', 
+         main=experiment, sub=paste(ncol(vg), 'markers'))
+    abline(v=gcoord.key, lty=2, col='lightblue')
+    abline(h=0.5, col='grey')
+    #dev.off()
+    #png(file=paste0(results.dir, 'seg_diagnostic_af_plot_pruned.png'), width=1024,height=512)
+    plot(markerGRr$gcoord, colSums(Gsub)/sum(classification), ylim=c(0,1), xlab='mpos', ylab='fraction of segs that are parent 2',
+         main=experiment, sub=paste(ncol(Gsub), 'markers after pruning'))
+    abline(v=gcoord.key, lty=2, col='lightblue')
+    abline(h=0.5, col='grey')
+    dev.off()
+   
+    rm(vg) 
+    # relatedness between segs 
+    tG=t(Gsub)
+    tt=hclust(as.dist(1-(crossprod(scale(t(Gsub)))/(nrow(tG)-1))^2))
+    png(file=paste0(results.dir, 'seg_diagnostic_corr_clust_plot.png'), width=1024,height=512)
+    plot(tt, labels=F, main=experiment, ylab="1-r^2")
+    dev.off()
     
-    G=standardise2(vg)
-    #prune markers 
-    chr.ind=split(1:length(m.granges), as.character(seqnames(m.granges)))
-    G.chr=lapply(chr.ind, function(x) G[,x])
-    Gcor.chr=lapply(G.chr, function(x) crossprod(x)/(nrow(x)-1))
-    fcm.chr=lapply(Gcor.chr, function(x) caret::findCorrelation(x,cutoff=.999, verbose=F) )
-    fcm=as.vector(unlist(mapply(function(x,y) x[y],  sapply(G.chr, colnames), fcm.chr)))
-    
-    m.to.keep=which(!colnames(vg)%in% fcm) #colnames(vg)[fcm])
-    Greduced=vg[,m.to.keep]
-    rm(Gcor.chr)
-    m.to.keep=match(colnames(Greduced), colnames(vg))
-
-    markerGRr=m.granges[m.to.keep]
-    cisMarkers=getCisMarker(sgd.genes, markerGRr, counts)
-
     #count informative cells per transcript
     infoCells=rowSums(counts>0)
-    expressed.transcripts=names(infoCells)[(infoCells>128)] #names(sum(infoCells>128)) #[infoCells>128,]
+    expressed.transcripts=names(infoCells)[(infoCells>minInformativeCellsPerTranscript)] #names(sum(infoCells>128)) #[infoCells>128,]
 
     #select only the transcripts expressed in enough cells 
     Yr=t(counts[expressed.transcripts,])
-    cisMarkers=cisMarkers[cisMarkers$transcript %in% expressed.transcripts,]
     
-    #here we define covariates 
-    mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts))))
-
+    cisMarkers=getCisMarker(sgd.genes[sgd.genes$gene_id %in% rownames(counts),], markerGRr, t(Yr)) #counts)
+    #cisMarkers=cisMarkers[cisMarkers$transcript %in% expressed.transcripts,]
     #if no subsetting this is not necessary
-    cMsubset=cisMarkers[which(cisMarkers$transcript %in% colnames(Yr)),]
+    #cMsubset=cisMarkers[which(cisMarkers$transcript %in% colnames(Yr)),]
 
-    Gsub=Greduced
-    cisNB=fitNBCisModel(cMsubset, mmp1, Yr, Gsub, resids='pearson')          #, resids='deviance')
-    saveRDS(cisNB, file=paste0(results.dir, 'cisNB.RDS'))
+    transcript.features=data.frame(gene=colnames(Yr), non.zero.cells=colSums(Yr>1), tot.expression=colSums(Yr))
+    barcode.features=data.frame(barcode=colnames(counts), nUMI=colSums(counts))
 
-    thetas=sapply(cisNB, function(x) as.numeric(x$theta))
-    intercepts=sapply(cisNB, function(x) as.numeric( x$fmodelBs[1]) )
+    mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts))))
+    cSplit=split(cisMarkers, cisMarkers$marker)
+    #dispatch is slower than execute 
+    clusterExport(cl, varlist=c("mmp1", "Gsub", "cSplit", "counts","doCisNebula", "nebula"))
+    cisNB=parLapply(cl, names(cSplit), doCisNebula)
+    names(cisNB)=names(cSplit)
 
-    Yks=Matrix(Yr, sparse=T)
-    clusterExport(cl, varlist=c("thetas", "Yks", "Gsub", "mmp1", "nbLL", "domap"))
-    clusterEvalQ(cl, { Y=Yks;    DM=mmp1;   return(NULL);})
+    #cisNB=mclapply(cSplit, function(x,...) {
+    #    mmpN=cbind(mmp1, Gsub[,x$marker[1]])
+    #    yind=match(x$transcript, rownames(counts))
+    #    NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
+    #    NBcis$summary$gene=rownames(counts)[yind]
+    #    return(NBcis)
+    #    },mmp1,cisMarkers,Gsub,counts, mc.cores=24)
+    saveRDS(cisNB, file=paste0(results.dir, 'cisNB2.RDS'))
+    cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
+    names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+
+    png(file=paste0(results.dir, 'cis_p_hist.png'), width=512,height=512)
+    hist(cis.ps,breaks=50, main=experiment, sub=sum(p.adjust(cis.ps,'fdr')<.05))
+    dev.off()
+
+    #here we define covariates 
+    thetas=as.vector(1/unlist(sapply(cisNB, function(x) x$overdispersion$Cell)))
+    names(thetas)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+
+    nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
+    dispersion.df=data.frame(gene=nullNB$summary$gene, theta.null=1/nullNB$overdispersion[,2])
+    cisModel.df=data.frame(gene=names(thetas),theta.cis=thetas)
+    dispersion.df=left_join(dispersion.df, cisModel.df, by='gene')
+    saveRDS(dispersion.df, file=paste0(results.dir, 'dispersions.RDS'))
+
+    #could switch between thetas here 
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+
+    print('Calculating LODs')
+    #Yks=Matrix(Yr, sparse=T)
+    clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
+    clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
     LOD=do.call('rbind', parLapply(cl, names(thetas), domap) )
     LOD[is.na(LOD)]=0
     LOD=LOD/(2*log(10))
     rownames(LOD)=names(thetas)
-    saveRDS(LOD, file=paste0(results.dir, 'LOD_NB.RDS'))
+    saveRDS(LOD, file=paste0(results.dir, 'LOD_NB3.RDS'))
     msig=which(LOD>5, arr.ind=T)
-    png(file=paste0(results.dir, 'seg_diagnostic_plot.png'), width=768,height=768)
+    png(file=paste0(results.dir, 'seg_diagnostic_plot_3.png'), width=768,height=768)
     plot(msig[,2], msig[,1])
     dev.off()
+}
+
+
+
+    #insert code speedup for dispersion estimate here
+    L=irlba(Gsub,10)
+    colnames(L$u)=paste0('u',1:ncol(L$u))
+    mmpN=model.matrix(lm(Yr[,1]~log(colSums(counts))))
+    mmpN=cbind(mmpN, L$u)
+
+    pcNB=nebula(counts[expressed.transcripts,], mmpN[,1], pred=mmpN)
+    pcModel.df=data.frame(gene=pcNB$summary$gene,theta=1/pcNB$overdispersion[,2])
+    nullModel.df=data.frame(gene=pcNBnull$summary$gene,theta=1/pcNBnull$overdispersion[,2])
+
+    cisModel.df=data.frame(gene=names(thetas),theta=thetas)
+
+    test=left_join(cisModel.df, pcModel.df, by='gene', suffix=c('.cis', '.pc'))
+    test=left_join(test, nullModel.df, by='gene', suffix=c('','.null'))
+    theta_v_expression=left_join(transcript.features, test, by='gene')
+    
+    library(viridis)
+    library(ggpubr)
+    a=ggplot(theta_v_expression, aes(x=log2(tot.expression),
+                                   y=log2(1/theta.cis),
+                                   col=log2(non.zero.cells)))+geom_point()+scale_colour_viridis()
+    b=ggplot(theta_v_expression, aes(x=log2(tot.expression),
+                                   y=log2(1/theta.pc),
+                                   col=log2(non.zero.cells)))+geom_point()+scale_colour_viridis()
+
+  
+   cc=ggplot(theta_v_expression, aes(x=log2(tot.expression),
+                                   y=log2(1/theta),
+                                   col=log2(non.zero.cells)))+geom_point()+scale_colour_viridis()
+
+    ggarrange(a,b,cc)
+plot(log(test$theta.x), log(test$theta.y))
+
+    saveRDS(pcNB, file=paste0(results.dir, 'pcNB3.RDS'))
+
+    pcNBnull=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
+
+
+    test=cv.glmnet(mmpN, Yr[,4], family='poisson', alpha=1)
+
+    
+    print('Calculating overdispersions') 
+    pcNB=nebula(counts[expressed.transcripts,], mmpN[,1], pred=mmpN)
+    saveRDS(pcNB, file=paste0(results.dir, 'pcNB3.RDS'))
+    #pcNB=readRDS(paste0(results.dir, 'pcNB2.RDS'))
+    thetas=1/pcNB$overdispersion$Cell  
+    names(thetas)=pcNB$summary$gene
+
+
+
+    theta_v_expression=left_join(pcModel.df, transcript.features, by='gene')
+    ggplot(theta_v_expression, aes(x=log2(tot.expression),
+                                   y=log2(1/theta),
+                                   col=log2(non.zero.cells)))+geom_point()+scale_colour_viridis()
+  
+
+
+
+
+
+
+
+
+
+       # LODo=readRDS(paste0(results.dir, 'LOD_NB2.RDS'))
+
 
 }
+
+
+
+
+
+
+
 
 
 match(rownames(LOD), sgd.genes$gene_id)
@@ -488,8 +629,58 @@ match(rownames(LOD), sgd.genes$gene_id)
     rawC=standardise2(data.matrix(log(Yr[,colnames(Yr) %in% cc$ORF]+1)/log(colSums(counts))))
     um2=uwot::umap(rawC, n_neighbors=30, metric="cosine", min_dist=0.3, n_threads=36)
 
+
+
+
     df=data.frame(u1=um2[,1], u2=um2[,2],data.matrix(Yr))
     ggplot(df,aes(x=u1,y=u2, col=log10(YBL003C)+1))+scale_color_viridis()+geom_point()
+
+
+
+
+
+ #   cell.cycle.classification.file=paste0(base.dir, cell.cycle.classification.dir, cell.cycle.classification.names[ee], '.cluster.assignments.txt')
+ #   cell.cycle.annot.file=paste0(base.dir, cell.cycle.classification.dir, cell.cycle.classification.names[ee], '.cluster.annotations.txt')
+    # get cell cycle covariates
+#    cell.covariates=getCCinfo(cell.cycle.classification.file,cell.cycle.annot.file)
+    #note n gets smaller here due to cells missing classification
+ #   cell.covariates=cell.covariates[!is.na(cell.covariates$cid),]
+ #   print(experiment)
+ #   print(nrow(cell.covariates))
+ #   saveRDS(cell.covariates, paste0(results.dir, 'cell_covariates.RDS'))
+  
+    
+    # par(xaxs='i', yaxs='i')
+  #  plot(m.granges$gcoord, colSums(pg[rownames(pg)%in%rownames(vg),])/2727, ylim=c(0,1))
+  #  plot(m.granges$gcoord, colSums(vg[classification,]-1)/sum(classification), ylim=c(-1,1), xlab='mpos', ylab='af')
+  #  abline(v=gcoord.key, lty=2, col='lightblue')
+  #  cis.marker=getCisMarker(sgd.genes, m.granges, counts)
+ #vgV=getSavedGenos(chroms, results.dir, type='viterbi')
+    #par(xaxs='i', yaxs='i')
+    #plot(m.granges$gcoord, colSums(pg[rownames(pg)%in%rownames(vg),])/2727, ylim=c(0,1))
+    #plot(m.granges$gcoord, colSums(vgV[classification,]-1)/sum(classification), ylim=c(0,1), xlab='mpos', ylab='af')
+    #abline(v=gcoord.key, lty=2, col='lightblue')
+
+     # assuming classification matches experiment, subset and propagate order across phenos and genos 
+
+ #cisNB=fitNBCisModel(cMsubset, mmp1, Yr, Gsub, resids='pearson')          #, resids='deviance')
+    #saveRDS(cisNB, file=paste0(results.dir, 'cisNB.RDS'))
+    #thetas=sapply(cisNB, function(x) as.numeric(x$theta))
+    #intercepts=sapply(cisNB, function(x) as.numeric( x$fmodelBs[1]) )
+    #plot(1/comp_models$theta.x, 1/comp_models$theta.y, main='1/theta', xlim=c(0,25), ylim=c(0,25), xlab='cis model', ylab='10 pc model')
+    
+    #cisModel=readRDS(paste0(results.dir, 'cisNB.RDS'))
+    #pcModel=readRDS(paste0(results.dir, 'pcNB2.RDS'))
+    #thetas=sapply(cisModel, function(x) as.numeric(x$theta))
+    #cisModel.df=data.frame(gene=names(thetas), theta=thetas)
+    #pcModel.df=data.frame(gene=pcModel$summary$gene,theta=1/pcModel$overdispersion[,2])
+    #comp_models=left_join(cisModel.df, pcModel.df, by='gene')
+
+
+
+
+
+
 
 
 
