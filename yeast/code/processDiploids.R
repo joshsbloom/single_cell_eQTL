@@ -44,7 +44,20 @@ experiments=list(
     '14_GP1_3004_3051_274_375_May10'=names(crosses.to.parents)[c(1,2,4,14)],
     '15_GP2_376_377_393_3008_May10'=names(crosses.to.parents)[c(3,5,6,8)],
     '16_GP3_2999_3000_3001_3049_May10'=names(crosses.to.parents)[c(9,10,11,12)],
-    '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(7,13,15,16)])
+    '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(7,13,15,16)],
+    '18_3051_May10'=names(crosses.to.parents)[2])
+
+#good crosses A, B, 3004, 3008, 2999, 3001, 3003, 3028
+
+good.dips=list(
+    '12_Group_1_diploids_3004_2444_3051_5k_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
+    '13_Group1_diploids_3004_2444_3051_7point5K_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
+    '14_GP1_3004_3051_274_375_May10'=names(crosses.to.parents)[c(2,4,14)],
+    '15_GP2_376_377_393_3008_May10'=names(crosses.to.parents)[c(8)],
+    '16_GP3_2999_3000_3001_3049_May10'=names(crosses.to.parents)[c(9,11)],
+    '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(13,16)],
+    '18_3051_May10'=names(crosses.to.parents)[2])
+
 
 for(experiment.name in names(experiments)){
     input.diploids=experiments[[experiment.name]]
@@ -73,22 +86,317 @@ for(experiment.name in names(experiments)){
         
         nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data)
         saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+    }
+}
 
+aseElife=gdata::read.xls('/data/single_cell_eQTL/yeast/reference/elife-35471-data7-v2_ASE_results.xlsx')
+
+experiment.name=names(experiments)[4]
+
+library(ggplot2)
+library(ggrepel)
+library(viridis)
+nUMI.thresh=10000
+
+for(experiment.name in names(experiments)){
+    input.diploids=experiments[[experiment.name]]
+    dip.Assignments=readRDS(file=paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+    ase.Data=readRDS(paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
+        
+    print(input.diploids)
+    for(dip in input.diploids) {
+        phasedCounts=readRDS(file=paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
+     #   plot(log2(rowSums(phasedCounts[[1]])), log2(rowSums(phasedCounts[[2]])))
+             classified.cells=dip.Assignments$diploid_name==dip
+        selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip]
+        cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
+        p1=phasedCounts[[1]][cells.to.keep,]
+        p2=phasedCounts[[2]][cells.to.keep,]
+        gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
+        informativeCellsPerTranscript=colSums(gInfoTotals>0)
+        paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS')
+        infoCells=data.frame(gene=names(informativeCellsPerTranscript), genoInfoCells=as.vector(informativeCellsPerTranscript), stringsAsFactors=F)
+        
+
+        parent1=crosses.to.parents[[dip]][1]
+        parent2=crosses.to.parents[[dip]][2]
+
+
+        png(paste0(results.base.dir,experiment.name,'/',dip, '-countsPerTranscript.png'), width=768,height=768)
+        plot(log2(colSums(phasedCounts[[1]])), log2(colSums(phasedCounts[[2]])),
+             main=paste(experiment.name, dip),
+             sub='geno informative counts per transcript',
+             xlab=paste('log2', parent1),
+             ylab=paste('log2', parent2))
+        abline(0,1)
+        dev.off()
+
+        gCounts=sapply(phasedCounts, colSums)
+        png(paste0(results.base.dir,experiment.name,'/',dip,'-countsPerTranscript_GenomePos.png'), width=1024,height=512)
+
+        plot(sgd.genes$gcoord[match(rownames(gCounts),sgd.genes$gene_id)], 
+             log2(gCounts[,1]/gCounts[,2]),
+             xlab='genomic coordinate per each transcript',
+             ylab=paste0('log2(', parent1, '/', parent2, ')'),
+             main=paste(experiment.name, dip)   )
+        abline(v=gcoord.key, lty=2, col='lightblue')
+        abline(h=0, col='black')
+        dev.off()
     }
 }
 
 
 
 
+for(experiment.name in names(experiments)[1:6]){
+    input.diploids=good.dips[[experiment.name]]
+    dip.Assignments=readRDS(file=paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+    ase.Data=readRDS(paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
+        
+    print(input.diploids)
+    for(dip in input.diploids) {
+        phasedCounts=readRDS(file=paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
+     #   plot(log2(rowSums(phasedCounts[[1]])), log2(rowSums(phasedCounts[[2]])))
+        classified.cells=dip.Assignments$diploid_name==dip
+        selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip]
+        cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
+        p1=phasedCounts[[1]][cells.to.keep,]
+        p2=phasedCounts[[2]][cells.to.keep,]
+        gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
+        informativeCellsPerTranscript=colSums(gInfoTotals>0)
+        paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS')
+        infoCells=data.frame(gene=names(informativeCellsPerTranscript), genoInfoCells=as.vector(informativeCellsPerTranscript), stringsAsFactors=F)
+        
+
+        parent1=crosses.to.parents[[dip]][1]
+        parent2=crosses.to.parents[[dip]][2]
+
+   
+       bbin.model.results=readRDS(paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+       nbin.model.results=readRDS(paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+       #left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='cond'), by='gene')
+
+       nbin.model.resultsM=left_join(nbin.model.results %>% filter(term=='genoB' & component=='cond'),
+                                      nbin.model.results %>% filter(term=='genoB' & component=='disp'), by='gene', suffix=c('.cond', '.disp'))
+
+       # if likelihood ratio test
+        nbin.model.resultsM=nbin.model.resultsM %>% mutate(p.llrt.disp=pchisq(-2*(logLik.red.disp-logLik.disp),1,lower.tail=F))
+       # ggplot(nbin.model.resultsM, aes(x=-log10(p.value.disp), y=-log10(p.llrt.disp)))+geom_point()+theme_bw()
+        
+
+        all_models=left_join(bbin.model.results %>% filter(term=='(Intercept)'), nbin.model.resultsM, by='gene')
+        all_models=left_join(all_models, infoCells, by='gene')
+
+        ggplot(all_models, aes(x=estimate, y=-log10(p.value), col=log2(genoInfoCells)))+geom_point()+xlim(c=-10,10)+
+             scale_colour_viridis() +
+               geom_label_repel(aes(x=estimate,
+                                    y=-log10(p.value),
+                               label=ifelse(p.adjust(p.value, method='fdr')<.05,gene,'')))+theme_bw()+
+                               xlab(paste('Mean effect beta-binomial', parent2, 'vs', parent1))+
+             ggtitle(paste(experiment.name, dip))
+        ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-bbin_sigASE.png')))
+
+
+
+        #replace with logLik.disp
+        a=ggplot(all_models %>% filter(!is.na(logLik)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) ,
+               aes(x=estimate.disp, y=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
+               col=log2(genoInfoCells))) + #log2(genoInfoCells))) +
+            geom_point()+
+          scale_colour_viridis() + # name='lodispersion q<.05') +
+          #scale_colour_manual(name='wald dispersion q<.05', values=c('black','red')) +
+            xlab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
+            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
+            geom_label_repel(aes(x=estimate.disp,
+                               y=estimate.cond,
+                               label=ifelse(sig.disp,gene,'')))+theme_bw()+
+             ggtitle(paste(experiment.name, dip))
+         b=ggplot(all_models %>% filter(!is.na(logLik)), aes(x=p.value.disp))+geom_histogram()+ xlab('(p) wald disp effect')+theme_bw()
+         ggarrange(a,b, nrow=2, heights=c(1,.25))
+         ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-nbin_sigDisp_ASE.png')))
+    }
+}
+
+
+
+#lower in BY
+to.test=nbin.model.resultsM[which(-log10(nbin.model.resultsM$p.llrt.disp)>50),]
+g='YLR350W'
+g='YAR019C'
+g='YBR031W'
+g='YNL336W'
+g='YBR012C'
+g='YJL201W'
+g='YKL160W'
+g='YBR043C'
+
+#YDL207W
+for(g in to.test$gene) {
+    print(g)
+    aseElife[aseElife$gene==g,]
+    all_models[all_models$gene==g,]
+    plot( jitter(log10(p1[,g]+1)), jitter(log10(p2[,g]+1))
+         , xlab=parent1, ylab=parent2)
+    readline()
+
+   plot( (log10((p1[,g]+1)/rowSums(p1+p2))), (log10((p2[,g]+1)/rowSums(p1+p2)))
+    , xlab=parent1, ylab=parent2)
+    readline()
+
+}
+
+
+    y=c(log10(p1[,g]+1/rowSums(p1+p2)),log10(p2[,g]+1/rowSums(p1+p2)))
+    x=rep(c(parent1,parent2),each=nrow(p1))
+    #readline()
+
+    ggb=data.frame(geno=x, ncounts=y)
+    a=ggplot(ggb,aes(geno,ncounts))+geom_quasirandom()
+      plot(a)
+}
+    
+       bbin.model.results=readRDS(paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+       nbin.model.results=readRDS(paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+       #left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='cond'), by='gene')
+
+        nbin.model.resultsM=left_join(nbin.model.results %>% filter(term=='genoB' & component=='cond'),
+                                      nbin.model.results %>% filter(term=='genoB' & component=='disp'), by='gene', suffix=c('.cond', '.disp'))
+
+        # if likelihood ratio test
+        nbin.model.resultsM=nbin.model.resultsM %>% mutate(p.llrt.disp=pchisq(-2*(logLik.red.disp-logLik.disp),1,lower.tail=F))
+
+        a=ggplot(nbin.model.resultsM, aes(x=-log10(p.value.disp), y=-log10(p.llrt.disp)))+geom_point()+theme_bw()+
+            xlab('-log10(p) wald') +
+            ylab('-log10(p) lrt') +ggtitle('Dispersion test comparison')
+
+        b=ggplot(nbin.model.resultsM, aes(x=p.value.disp))+geom_histogram()+ xlab('(p) wald')
+        c=ggplot(nbin.model.resultsM, aes(x=p.llrt.disp))+geom_histogram()+xlab('(p) lrt')
+          grid.arrange(a,b,c, ncol=2, nrow=2, layout_matrix=rbind(c(1,2),c(1,3)))+ggtitle(paste(experiment.name, dip))
+        ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-compWaldLRT.png')))
+        
+
+        all_models=left_join(bbin.model.results %>% filter(term=='(Intercept)'), nbin.model.resultsM, by='gene')
+        all_models=left_join(all_models, infoCells, by='gene')
+
+        ggplot(all_models %>% filter(!is.na(logLik.disp)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) %>%
+               aes(x=estimate.disp, y=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
+               col=sig.disp)) + #log2(genoInfoCells))) +
+            geom_point()+
+         #scale_colour_viridis() + # name='lodispersion q<.05') +
+          scale_colour_manual(name='wald dispersion q<.05', values=c('black','red')) +
+            xlab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
+            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
+            geom_label_repel(aes(x=estimate.disp,
+                               y=estimate.cond,
+                               label=ifelse(sig.disp,gene,'')))+theme_bw()+
+             ggtitle(paste(experiment.name, dip))
+      
+         ggplot(all_models %>% filter(!is.na(logLik.disp)), 
+                aes(x=estimate.cond, y=-log10(p.value.cond)))+geom_point()
+       
+
+           doplot=F
+        if(experiment.name == '18_3051_May10' & doplot==T) {
+        #plot(all_models$estimate[!is.na(all_models$logLik.disp)], 
+        #     all_models$estimate.cond[!is.na(all_models$logLik.disp)], xlim=c(-5,5), ylim=c(-5,5),
+        #     xlab=paste('bbin log(', parent2, '/', parent1, ')'),
+        #     ylab=paste('nbin log(', parent2, '/', parent1, ')'))
+        #abline(0,1)
+     
+         #compare negbin vs bbin
+        ggplot(all_models %>% filter(!is.na(logLik.disp)),
+               aes(x=estimate, y=estimate.red.cond, col=paste(p.adjust(p.value,'fdr')<.05)))+
+            geom_point()+
+          scale_colour_manual(name='beta binomial q<.05', values=c('black','red')) +
+            xlab(paste('Mean effect beta-binomial', parent2, 'vs', parent1)) + 
+            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) + 
+            #geom_label_repel(aes(x=estimate,
+            #                   y=estimate.cond,
+            #                   label=ifelse(p.adjust(p.value, 'fdr')<.05,gene,'')))+
+           geom_abline(slope=1, intercept=0)+
+            theme_bw()
+        ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-bbin_v_negbin.png')))
+
+
+        #plot(all_models$estimate.disp[!is.na(all_models$logLik.disp)], 
+        #     all_models$estimate.cond[!is.na(all_models$logLik.disp)], 
+        #     xlab=paste('Dispersion effect negative-binomial', parent2, 'vs', parent1),
+        #     ylab=paste('Mean effect negative-binomial', parent2, 'vs', parent1),
+        #     col=(p.adjust(all_models$p.value.disp[!is.na(all_models$logLik.disp)],'fdr')<.05)+1 )
+        #abline(0,1)
+
+        a=ggplot(all_models %>% filter(!is.na(logLik.disp)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) %>%
+                 mutate(sig.displl=p.adjust(p.llrt.disp, 'fdr')<.05),
+               aes(x=estimate.disp, y=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
+               col=sig.disp)) + #log2(genoInfoCells))) +
+            geom_point()+
+        #scale_colour_viridis() + # name='lodispersion q<.05') +
+          scale_colour_manual(name='wald dispersion q<.05', values=c('black','red')) +
+            xlab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
+            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
+          #  geom_label_repel(aes(x=estimate.disp,
+          #                     y=estimate.cond,
+          #                     label=ifelse(sig.disp,gene,'')))+theme_bw()+
+             ggtitle(paste(experiment.name, dip))
+
+        b=ggplot(all_models %>% filter(!is.na(logLik.disp)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) %>%
+                 mutate(sig.displl=p.adjust(ifelse(p.llrt.disp==0, 2e-16,p.llrt.disp), 'fdr')<.05),
+               aes(x=estimate.disp, y=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
+               col=sig.displl)) + #log2(genoInfoCells))) +
+            geom_point()+
+        #scale_colour_viridis() + # name='lodispersion q<.05') +
+          scale_colour_manual(name='llrt dispersion q<.05', values=c('black','red')) +
+            xlab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
+            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
+          #  geom_label_repel(aes(x=estimate.disp,
+          #                     y=estimate.cond,
+          #                     label=ifelse(sig.displl,gene,'')))+theme_bw()+
+             ggtitle(paste(experiment.name, dip))
+
+
+
+        c= ggplot(all_models %>% filter(!is.na(logLik.disp)),
+               aes(x=estimate.disp, y=estimate.cond, col=log2(genoInfoCells)))+
+            geom_point()+
+        scale_colour_viridis() + # name='lodispersion q<.05') +
+            xlab('Dispersion effect RM v BY') + 
+            ylab('Mean effect RM v BY') + theme_bw()+
+            #geom_label_repel(aes(x=estimate.disp,
+            #                   y=estimate.cond,
+            #                   label=ifelse(p.adjust(p.value.disp,'fdr')<.05,gene,'')))+theme_bw()+
+             ggtitle(paste(experiment.name, dip))
+
+    ggarrange(a,b,c, nrow=1)
+    ggsave(paste0(results.base.dir,experiment.name,'/',dip,'-mean_v_disp_comp.png'))
+
+
+
+        aseElifeMerged=left_join(aseElife, bbin.model.results %>% filter(term=='(Intercept)'), by='gene')
+        aseElifeMerged=aseElifeMerged[!is.na(aseElifeMerged$p.value),]
+        ggplot(aseElifeMerged,
+               aes(x=log2(exp(estimate)), y=log2ASEFoldChange, col=paste(p.adjust(p.value,'fdr')<.05, sigDeciderFDR>0)))+
+            geom_point()+
+        scale_colour_discrete(name='| sig sc | sig bulk |') +
+            xlab('log2(bbin estimate sc)') + 
+            ylab('log2ASEFoldChange bulk') + 
+            geom_label_repel(aes(x=log2(exp(estimate)),
+                               y=log2ASEFoldChange,
+                               label=ifelse(p.adjust(p.value,'fdr')<.05,gene,'')))+theme_bw()+
+        ggtitle(paste(experiment.name, dip, 'r = ', 
+                      round(cor(log2(exp(aseElifeMerged$estimate)),aseElifeMerged$log2ASEFoldChange),2)))
+        ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-compBulk.png')))
+
+        }
+    }
+}  
 
 
 
 
+#bbin.model.results %>% filter(term=='(Intercept)')
 
-aseElife=gdata::read.xls('/data/single_cell_eQTL/yeast/reference/elife-35471-data7-v2_ASE_results.xlsx')
+bbin.model.results$p.value[bbin.model.results$p.value==0]=2e-16
 
-bbin.model.results %>% filter(term=='(Intercept)')
-test=left_join(aseElife, bbin.model.results %>% filter(term=='(Intercept)'), by='gene')
 plot(log2(exp(test$estimate)),test$log2ASEFoldChange)
 
 test=left_join(aseElife, nbin.model.results %>% filter(term=='genoB' & component=='cond'), by='gene')
