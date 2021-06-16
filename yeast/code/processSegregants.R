@@ -13,6 +13,13 @@ library(foreach)
 library(doMC)
 library(glmmTMB)
 library(ggplot2)
+library(mgcv)
+library(Rfast2)
+library(fastglm)
+library(MASS)
+library(irlba)
+library(nebula)
+library(dplyr)
 
 # for parallelizing the HMM
 ncores=16
@@ -26,6 +33,157 @@ source(paste0(code.dir, 'estimateEmissionProbs.R'))
 source(paste0(code.dir, 'HMM_fxs.R'))
 source(paste0(code.dir, 'runHMM_custom.R'))
 
+source(paste0(code.dir, 'ASE_fxs.R'))
+
+# parallelized standardise function
+standardise2 <- function (x, center = TRUE, scale = TRUE) {
+  if ( center & scale ) {
+    y <- t(x) - Rfast::colmeans(x,parallel=T)
+    y <- y / sqrt( Rfast::rowsums(y^2) ) * sqrt( (dim(x)[1] - 1) )
+	y <- t(y)
+  } else if ( center & !scale ) {
+    m <- Rfast::colmeans(x,parallel=T)
+    y <- eachrow(x, m, oper ="-" )
+  } else if ( !center & scale ) {
+    s <- Rfast::colVars(x, std = TRUE,parallel=T)
+    y <- eachrow(x, s, oper = "/")
+  }
+  colnames(y)=colnames(x)
+  rownames(y)=rownames(x)
+  y
+} 
+
+
+fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids=NULL) {
+    mmp0=mmp1[,-1]
+
+    #nbR=Yk
+    #nbR[is.numeric(nbR)]=NA
+    ##nbP=nbR
+
+
+    cisNB=list() 
+    for(r in 1:nrow(cMsubset)){
+        print(r)
+        gn=as.character(cMsubset$transcript[r])
+        p=as.character(cMsubset$marker[r])
+        cmodel=cbind(mmp0, Gsub[,p])
+        nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
+        if(!is.na(nbr$info[4]) & (nbr$info[4]<100 & !is.na(nbr$info[3])) ){
+             theta.est=nbr$info[4]
+             coef.est=nbr$be[,1]
+        } else {
+            nbr=mgcv::gam(Yk[,gn]~cmodel, family=mgcv::nb , method="ML")
+            theta.est=nbr$family$getTheta(T)
+            coef.est=as.vector(coef(nbr))
+        }
+        XX=cbind(mmp1, Gsub[,p])
+        msize=ncol(XX)
+        fnbrF=fastglm(XX, Yk[,gn], start=coef.est, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        ##pseudo r^2 statistics 
+        ##library(performance)
+        ##class(fnbrF)='glm'
+        ##r2(fnbrF)
+        fnbrN=fastglm(mmp1,Yk[,gn], start=coef.est[-msize],  family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+        #if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
+        #if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
+        cisNB[[gn]]$transcript=gn
+        cisNB[[gn]]$lmarker=p
+        cisNB[[gn]]$theta=theta.est
+        cisNB[[gn]]$negbin.beta=as.numeric(coef(fnbrF)[msize])
+        cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[msize])
+        cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
+        cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
+        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) 
+         #-2*(nmodel-plr)
+        cisNB[[gn]]$fmodelBs=coef(fnbrF)
+        
+        if(resids=='pearson') {       cisNB[[gn]]$pearsonResiduals=residuals(fnbrF,'pearson') }
+        
+        #print(cisNB[[gn]])
+    }
+
+   # nbR.var=colVars(nbR)
+   # nbR=nbR[,-which(is.na(nbR.var))]
+    return(cisNB) #, nbR=nbR))
+}
+
+# formula for calculating the negative binomial glm log likelihood 
+nbLL=function (y, mu, theta)  {
+    return( -sum ( (y + theta) * log(mu + theta) - y * log(mu) + lgamma(y + 1) - theta * log(theta) + lgamma(theta) - lgamma(theta + y) ))
+}
+# fast calculation of negative binomial LL across the genome if theta is known 
+domap=function(gn, ...) { 
+       theta.est=thetas[gn]
+       YY=Y[,gn]
+       nbn=negative.binomial(theta=theta.est,link='log')
+      
+       fnbrN=fastglmPure(DM, YY, family=nbn)
+       nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
+
+       LRS=rep(NA,ncol(Gsub))
+       names(LRS)=colnames(Gsub)
+
+       #initialize the last column of DM to be 1s
+       XXn=cbind(DM,1)
+       idx=1:ncol(Gsub)
+       gcovn=(ncol(XXn))
+       for(gx in idx) { 
+           #colnames(Gsub)){
+           XXn[,gcovn]=Gsub[,gx]
+           fnbrF=fastglmPure(XXn, YY,  family=nbn)
+           LRS[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+        }
+       return(LRS)
+}
+
+
+
+#cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
+
+LDprune=function(geno, m.granges, cor.cutoff=.999) {
+    G=standardise2(vg)
+    #prune markers 
+    chr.ind=split(1:length(m.granges), as.character(seqnames(m.granges)))
+    G.chr=lapply(chr.ind, function(x) G[,x])
+    Gcor.chr=lapply(G.chr, function(x) crossprod(x)/(nrow(x)-1))
+    fcm.chr=lapply(Gcor.chr, function(x) caret::findCorrelation(x,cutoff=cor.cutoff, verbose=F) )
+    fcm=as.vector(unlist(mapply(function(x,y) x[y],  sapply(G.chr, colnames), fcm.chr)))
+    m.to.keep=which(!colnames(vg)%in% fcm) #colnames(vg)[fcm])
+    Gsub=vg[,m.to.keep]
+    rm(Gcor.chr)
+    m.to.keep=match(colnames(Gsub), colnames(vg))
+    markerGRr=m.granges[m.to.keep]
+    return(list(Gsub=Gsub, markerGRr=markerGRr))
+}
+
+
+#overwrite these functions
+
+getCisMarker=function(sgd.genes, m.granges, counts) {
+    Yre=t(counts)
+    markerGR=m.granges
+    sgd.genes=sgd.genes[match(colnames(Yre), sgd.genes$gene_id),]
+    tag=sgd.genes
+
+    cisMarkers=data.frame(transcript=sgd.genes$gene_id, 
+                          marker=m.granges$sname[nearest(tag,markerGR)],
+                          stringsAsFactors=F)
+    cisMarkers=na.omit(cisMarkers)
+    return(cisMarkers)
+    #indices of cis eQTL in 
+    #rows are transcripts, columns are markers
+    #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
+}
+
+doCisNebula2=function(x,...) { # mmp1,counts,Gsub){
+        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
+        yind=match(x$transcript, rownames(counts))
+        NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
+        NBcis$summary$gene=rownames(counts)[yind]
+        return(NBcis)
+    }
+
 
 chroms=paste0('chr', as.roman(1:16)) 
 #c('I','II', 'III', 'IV', 'V', 'X')
@@ -36,6 +194,7 @@ reference.dir='/data/single_cell_eQTL/yeast/reference/'
 sgd.granges=import.gff(paste0(reference.dir, 'saccharomyces_cerevisiae.gff'))
 sgd=as.data.frame(sgd.granges)
 gcoord.key= build.gcoord.key(paste0(reference.dir, 'sacCer3.fasta'))
+sgd.genes=getSGD_GeneIntervals(reference.dir)
 
 # for now load all crosses--------------------------------------------------
 load(paste0(reference.dir, 'cross.list.RData'))
@@ -103,46 +262,17 @@ hList=list(
 )
 
 
-#experiments=c('1_2444_44_1-2', '2_2444_44-', '3_ByxRM_51-_1-2', 
-#              '4_ByxRM_51-', '0_BYxRM_480MatA_1', '0_BYxRM_480MatA_2')
-#cdesig=c('B','B', 'A', 'A', 'A', 'A')
-#cell.cycle.classification.names=c('set1', 'set2', 'set3', 'set4', 'set01', 'set02')
-#cell.cycle.classification.dir='results/cell_cycle/yeast_cc_annotations_v5/'
-
-
-#experiments=c('08_2444_cross_10k_Feb_21',
-#              '09_2444_cross_5k_Feb_21',
-#              '10_3004_cross_10k_Feb_21',
-#              '11_3004_cross_5k_Feb_21',
-#              '07_2444-cross-1',
-#              '07_2444-cross-2'
-#        )
-#cdesig=c('B', 'B',  '3004', '3004', 'B', 'B')            
-              
-              
 experiments=names(cList)
 cdesig=as.vector(sapply(cList, function(x) x))
 het.thresholds=as.vector(sapply(hList, function(x) x))
 data.dirs=paste0(base.dir, 'processed/', experiments, '/')
 het.across.cells.threshold=.1
               
-              
-#              '1_2444_44_1-2', '2_2444_44-', '3_ByxRM_51-_1-2', 
-#              '4_ByxRM_51-', '0_BYxRM_480MatA_1', '0_BYxRM_480MatA_2')
-#cdesig=c('B','B', 'A', 'A', 'A', 'A')
-#cell.cycle.classification.names=c('set1', 'set2', 'set3', 'set4', 'set01', 'set02')
-#cell.cycle.classification.dir='results/cell_cycle/yeast_cc_annotations_v5/'
-#by visual inspection (might want to revist this classification)
-                # for 08-11,07
-#het.thresholds=c(2^5.2, 2^4.9, 2^5.6, 2^4.9, 2^6,2^5.5)
-                #for 1,2,3,4,0,0
-                 #c(2^6.1, 2^7.5, 2^7, 2^7.4, 2^6.5,2^6.5)
+#note sgd gene def is updated to include 3' utr               
+#sgd.genes=sgd.granges[sgd.granges$type=='gene',]
+#sgd.genes$gcoord=gcoord.key[as.character(seqnames(sgd.genes))]+start(sgd.genes)
 
-
-#-----------------------------------------------------------------------------
-
-sgd.genes=sgd.granges[sgd.granges$type=='gene',]
-sgd.genes$gcoord=gcoord.key[as.character(seqnames(sgd.genes))]+start(sgd.genes)
+# RUN HMM 
 
 # iterate over each experiment -----------------------------------------------
 for(ee in c(1:6,13:16) ) { #5:length(experiments)){
@@ -233,167 +363,7 @@ for(ee in c(1:6,13:16) ) { #5:length(experiments)){
 
 #sgd.genes=sgd.granges[sgd.granges$type=='gene',]
 
-# parallelized standardise function
-standardise2 <- function (x, center = TRUE, scale = TRUE) {
-  if ( center & scale ) {
-    y <- t(x) - Rfast::colmeans(x,parallel=T)
-    y <- y / sqrt( Rfast::rowsums(y^2) ) * sqrt( (dim(x)[1] - 1) )
-	y <- t(y)
-  } else if ( center & !scale ) {
-    m <- Rfast::colmeans(x,parallel=T)
-    y <- eachrow(x, m, oper ="-" )
-  } else if ( !center & scale ) {
-    s <- Rfast::colVars(x, std = TRUE,parallel=T)
-    y <- eachrow(x, s, oper = "/")
-  }
-  colnames(y)=colnames(x)
-  rownames(y)=rownames(x)
-  y
-} 
-
-source(paste0(code.dir, 'ASE_fxs.R'))
-
-library(mgcv)
-library(Rfast2)
-library(fastglm)
-library(MASS)
-library(irlba)
-library(nebula)
-library(dplyr)
-
-fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids=NULL) {
-    mmp0=mmp1[,-1]
-
-    #nbR=Yk
-    #nbR[is.numeric(nbR)]=NA
-    ##nbP=nbR
-
-
-    cisNB=list() 
-    for(r in 1:nrow(cMsubset)){
-        print(r)
-        gn=as.character(cMsubset$transcript[r])
-        p=as.character(cMsubset$marker[r])
-        cmodel=cbind(mmp0, Gsub[,p])
-        nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
-        if(!is.na(nbr$info[4]) & (nbr$info[4]<100 & !is.na(nbr$info[3])) ){
-             theta.est=nbr$info[4]
-             coef.est=nbr$be[,1]
-        } else {
-            nbr=mgcv::gam(Yk[,gn]~cmodel, family=mgcv::nb , method="ML")
-            theta.est=nbr$family$getTheta(T)
-            coef.est=as.vector(coef(nbr))
-        }
-        XX=cbind(mmp1, Gsub[,p])
-        msize=ncol(XX)
-        fnbrF=fastglm(XX, Yk[,gn], start=coef.est, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
-        ##pseudo r^2 statistics 
-        ##library(performance)
-        ##class(fnbrF)='glm'
-        ##r2(fnbrF)
-        fnbrN=fastglm(mmp1,Yk[,gn], start=coef.est[-msize],  family=negative.binomial(theta=theta.est,link='log'), maxit=500)
-        #if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
-        #if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
-        cisNB[[gn]]$transcript=gn
-        cisNB[[gn]]$lmarker=p
-        cisNB[[gn]]$theta=theta.est
-        cisNB[[gn]]$negbin.beta=as.numeric(coef(fnbrF)[msize])
-        cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[msize])
-        cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
-        cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
-        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) 
-         #-2*(nmodel-plr)
-        cisNB[[gn]]$fmodelBs=coef(fnbrF)
-        
-        if(resids=='pearson') {       cisNB[[gn]]$pearsonResiduals=residuals(fnbrF,'pearson') }
-        
-        #print(cisNB[[gn]])
-    }
-
-   # nbR.var=colVars(nbR)
-   # nbR=nbR[,-which(is.na(nbR.var))]
-    return(cisNB) #, nbR=nbR))
-}
-
-# formula for calculating the negative binomial glm log likelihood 
-nbLL=function (y, mu, theta)  {
-    return( -sum ( (y + theta) * log(mu + theta) - y * log(mu) + lgamma(y + 1) - theta * log(theta) + lgamma(theta) - lgamma(theta + y) ))
-}
-# fast calculation of negative binomial LL across the genome if theta is known 
-domap=function(gn, ...) { 
-       theta.est=thetas[gn]
-       YY=Y[,gn]
-       nbn=negative.binomial(theta=theta.est,link='log')
-      
-       fnbrN=fastglmPure(DM, YY, family=nbn)
-       nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
-
-       LRS=rep(NA,ncol(Gsub))
-       names(LRS)=colnames(Gsub)
-
-       #initialize the last column of DM to be 1s
-       XXn=cbind(DM,1)
-       idx=1:ncol(Gsub)
-       gcovn=(ncol(XXn))
-       for(gx in idx) { 
-           #colnames(Gsub)){
-           XXn[,gcovn]=Gsub[,gx]
-           fnbrF=fastglmPure(XXn, YY,  family=nbn)
-           LRS[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
-        }
-       return(LRS)
-}
-
-
-
-
-#cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
-
-
-LDprune=function(geno, m.granges, cor.cutoff=.999) {
-    G=standardise2(vg)
-    #prune markers 
-    chr.ind=split(1:length(m.granges), as.character(seqnames(m.granges)))
-    G.chr=lapply(chr.ind, function(x) G[,x])
-    Gcor.chr=lapply(G.chr, function(x) crossprod(x)/(nrow(x)-1))
-    fcm.chr=lapply(Gcor.chr, function(x) caret::findCorrelation(x,cutoff=cor.cutoff, verbose=F) )
-    fcm=as.vector(unlist(mapply(function(x,y) x[y],  sapply(G.chr, colnames), fcm.chr)))
-    m.to.keep=which(!colnames(vg)%in% fcm) #colnames(vg)[fcm])
-    Gsub=vg[,m.to.keep]
-    rm(Gcor.chr)
-    m.to.keep=match(colnames(Gsub), colnames(vg))
-    markerGRr=m.granges[m.to.keep]
-    return(list(Gsub=Gsub, markerGRr=markerGRr))
-}
-
-
-#overwrite these functions
-sgd.genes=getSGD_GeneIntervals(reference.dir)
-getCisMarker=function(sgd.genes, m.granges, counts) {
-    Yre=t(counts)
-    markerGR=m.granges
-    sgd.genes=sgd.genes[match(colnames(Yre), sgd.genes$gene_id),]
-    tag=sgd.genes
-
-    cisMarkers=data.frame(transcript=sgd.genes$gene_id, 
-                          marker=m.granges$sname[nearest(tag,markerGR)],
-                          stringsAsFactors=F)
-    cisMarkers=na.omit(cisMarkers)
-    return(cisMarkers)
-    #indices of cis eQTL in 
-    #rows are transcripts, columns are markers
-    #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
-}
-
-doCisNebula2=function(x,...) { # mmp1,counts,Gsub){
-        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
-        yind=match(x$transcript, rownames(counts))
-        NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
-        NBcis$summary$gene=rownames(counts)[yind]
-        return(NBcis)
-    }
-
-cl <- makeCluster(64)
+cl <- makeCluster(36)
 clusterEvalQ(cl, {
        library(fastglm)
        library(Matrix)
@@ -401,11 +371,10 @@ clusterEvalQ(cl, {
        library(nebula)
        NULL  })
 
-
 nUMI_thresh=10000
 minInformativeCellsPerTranscript=128
 #for(ee in c(2,4,7:12,15,16)) { #1:length(experiments)){
-for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
+for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
 #for(ee in c(15,16)) { #1:length(experiments)){
 
     experiment=experiments[ee]
@@ -423,9 +392,9 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
     
     # read in genetic map and format for plotting
-    gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
-    gmap.subset=gmapC[match(rownames(g.counts[[1]]), paste0(gmapC$chrom, '_', gmapC$ppos)),]
-    gmap.ss=split(gmap.subset, gmap.subset$chrom) 
+    # gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
+    # gmap.subset=gmapC[match(rownames(g.counts[[1]]), paste0(gmapC$chrom, '_', gmapC$ppos)),]
+    # gmap.ss=split(gmap.subset, gmap.subset$chrom) 
    
     #get hmm genotype probs 
     vg=getSavedGenos(chroms, results.dir, type='genoprobs')
@@ -442,12 +411,36 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     #matches data to cell.covariates
     counts=counts[,names(classification)[classification]] #cell.covariates$barcode]
     vg=vg[names(classification)[classification],] #cell.covariates$barcode,]
-   
+  
+
+    # regression based classifier to kick out lousy segs
+    uncertainMarkerCount=rowSums(vg<.95 & vg>.05) 
+    countsPerCell=colSums(counts)
+    png(file=paste0(results.dir, 'additional_seg_filter.png'), width=1024,height=1024)
+    plot(log2(countsPerCell), log2(uncertainMarkerCount), 
+         xlab='log2(total UMIs per cell)', ylab='log2(uncertain marker count)',main=experiment,sub=ncol(counts)
+    )
+    seg.classifier.resids=residuals(lm(log2(uncertainMarkerCount)~log2(countsPerCell)))
+    outlier.segs=seg.classifier.resids>quantile(seg.classifier.resids, .995)
+    #points(xx[,1][xx3>quantile(xx3,.995)], xx[,2][xx3>quantile(xx3,.995)], col='blue')
+    points(log2(countsPerCell)[outlier.segs], log2(uncertainMarkerCount)[outlier.segs], col='blue') 
+    dev.off()
+
+    classifier.name2=names(outlier.segs)[!outlier.segs]
+    counts=counts[,classifier.name2]
+    vg=vg[classifier.name2,]
+
+    #plot(log2(rowSums(Yr)), uncertainMarkerCount)
+    #xx=cbind(log2(rowSums(Yr)), log2(uncertainMarkerCount))
+    #plot(xx[,1], xx[,2], xlab='log2(total UMIs per cell)', ylab='log2(uncertain marker count))
+    #xx3=residuals(lm(xx[,2]~xx[,1]))
+    #points(xx[,1][xx3>quantile(xx3,.995)], xx[,2][xx3>quantile(xx3,.995)], col='blue')
+
     pruned=LDprune(vg, m.granges)
     Gsub=pruned$Gsub
     markerGRr=pruned$markerGRr
     rm(pruned)
-    
+
     # af diagnostic    
     print("making diagonstic plots")
     png(file=paste0(results.dir, 'seg_diagnostic_af_plot.png'), width=1024,height=1024)
@@ -468,6 +461,12 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     # relatedness between segs 
     tG=t(Gsub)
     tt=hclust(as.dist(1-(crossprod(scale(t(Gsub)))/(nrow(tG)-1))^2))
+    cut.tt=cutree(tt,h=.5)
+    cut.tt.table=table(cut.tt)
+    singleton.cells=names(cut.tt)[cut.tt %in% as.numeric(names(cut.tt.table[cut.tt.table==1]))]
+    tt2=hclust(as.dist(1-(crossprod(scale(t(Gsub[singleton.cells,])))/(nrow(tG)-1))^2))
+    plot(tt2, labels=F, main=experiment, ylab="1-r^2")
+
     png(file=paste0(results.dir, 'seg_diagnostic_corr_clust_plot.png'), width=1024,height=512)
     plot(tt, labels=F, main=experiment, ylab="1-r^2")
     dev.off()
@@ -487,7 +486,8 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     transcript.features=data.frame(gene=colnames(Yr), non.zero.cells=colSums(Yr>1), tot.expression=colSums(Yr))
     barcode.features=data.frame(barcode=colnames(counts), nUMI=colSums(counts))
 
-    mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts))))
+    #replace log(counts)
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)))
     cSplit=split(cisMarkers, cisMarkers$marker)
    
     print("calculating dispersions")
@@ -520,6 +520,45 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     dispersion.df=left_join(dispersion.df, cisModel.df, by='gene')
     saveRDS(dispersion.df, file=paste0(results.dir, 'dispersions.RDS'))
 
+    #need to add the marker data structure here 
+    segDataList=list(Yr=Yr, 
+                    Gsub=Gsub,
+                    cisMarkers=cisMarkers, 
+                    transcript.features=transcript.features,
+                    barcode.features=barcode.features,
+                    dispersion.df=dispersion.df)
+
+    saveRDS(segDataList, file=paste0(results.dir, 'segData.RDS'))
+}
+
+#mapping eQTL
+
+for(ee in c(7,1:4,8:10,11,12)) {  #,15,16)) { #1:length(experiments)){
+#for(ee in c(15,16)) { #1:length(experiments)){
+
+    experiment=experiments[ee]
+    print(ee)
+    print(experiment)    
+    #cross=crossL[[cdesig[ee]]]
+    #parents=parentsL[[cdesig[ee]]]
+    data.dir=data.dirs[ee]
+    results.dir=paste0(base.dir, 'results/', experiment, '/')
+
+    segDataList=readRDS(file=paste0(results.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    #barcode.featues=segDataList$barcode.features
+
+    dispersion.df=segDataList$dispersion.df
+    counts=readRDS(paste0(results.dir, 'counts.RDS'))
+
+    # replace if barcode.features is present
+    #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)))
+     mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+
     #could switch between thetas here 
     thetas=dispersion.df$theta.cis
     names(thetas)=dispersion.df$gene
@@ -539,6 +578,90 @@ for(ee in c(4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
     dev.off()
 }
 
+
+
+domap_logistic=function(gn,...) {
+    YY=cc.incidence[,gn]
+    DM=mmp1
+    fnbrN=fastglmPure(DM, YY, family=binomial())
+    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
+
+    LRS=rep(NA,ncol(Gsub))
+    names(LRS)=colnames(Gsub)
+
+    #initialize the last column of DM to be 1s
+    XXn=cbind(DM,1)
+    idx=1:ncol(Gsub)
+    gcovn=(ncol(XXn))
+    for(gx in idx) { 
+       #colnames(Gsub)){
+        XXn[,gcovn]=Gsub[,gx]
+        fnbrF=fastglmPure(XXn, YY,  family=binomial())
+        #can just use deviances here 
+        LRS[gx]=fnbrN$deviance-fnbrF$deviance
+           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+   }
+    return(LRS)
+
+}
+
+#mapping cell-cycle
+for(ee in c(7,1:4,8:10,11,12,15,16)) {
+ #   ee=3
+     experiment=experiments[ee]
+    print(ee)
+    print(experiment)    
+    #cross=crossL[[cdesig[ee]]]
+    #parents=parentsL[[cdesig[ee]]]
+    data.dir=data.dirs[ee]
+    results.dir=paste0(base.dir, 'results/', experiment, '/')
+
+    segDataList=readRDS(file=paste0(results.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    #barcode.featues=segDataList$barcode.features
+
+    dispersion.df=segDataList$dispersion.df
+    counts=readRDS(paste0(results.dir, 'counts.RDS'))
+
+    # replace if barcode.features is present
+    #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)))
+    mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+
+    #read cell cycle info
+    cc.df=read_csv(paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignments.csv'))
+    cc.df=cc.df[cc.df$cell_name %in% rownames(Gsub),]
+    print(all.equal(cc.df$cell_name, rownames(Gsub)))
+
+    mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+
+    clusterExport(cl, varlist=c("Gsub", "mmp1", "cc.incidence", "domap_logistic"))
+    #clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
+    LOD=do.call('rbind', parLapply(cl, colnames(cc.incidence), domap_logistic) )
+    LOD[is.na(LOD)]=0
+    LOD=LOD/(2*log(10))
+    rownames(LOD)=colnames(cc.incidence)
+    saveRDS(LOD, file=paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignment_LOD.RDS'))
+
+    pdf(file=paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignment_LOD.pdf'), width=10, height=5)
+    for(i in 1:nrow(LOD)){
+        plot(LOD[i,],main=rownames(LOD)[i], ylab='LOD', xlab='marker index')
+        abline(v=cumsum(c(0,rle(tstrsplit(colnames(Gsub), '_')[[1]])$lengths)), lty=2, col='blue')
+    }
+    dev.off()
+}
+
+
+
+
+
+LODo=readRDS(paste0(results.dir, 'LOD_NB3.RDS'))
 
 
     #insert code speedup for dispersion estimate here
@@ -1287,3 +1410,33 @@ plot(match(cP$marker[cP$FDR<.1], colnames(Gr)),
              xlab='marker index', ylab='transcript index', main='joint analysis FDR < 10% corrected counts')
 
 #viterbi = 894 at fdr<10%
+#experiments=c('1_2444_44_1-2', '2_2444_44-', '3_ByxRM_51-_1-2', 
+#              '4_ByxRM_51-', '0_BYxRM_480MatA_1', '0_BYxRM_480MatA_2')
+#cdesig=c('B','B', 'A', 'A', 'A', 'A')
+#cell.cycle.classification.names=c('set1', 'set2', 'set3', 'set4', 'set01', 'set02')
+#cell.cycle.classification.dir='results/cell_cycle/yeast_cc_annotations_v5/'
+
+
+#experiments=c('08_2444_cross_10k_Feb_21',
+#              '09_2444_cross_5k_Feb_21',
+#              '10_3004_cross_10k_Feb_21',
+#              '11_3004_cross_5k_Feb_21',
+#              '07_2444-cross-1',
+#              '07_2444-cross-2'
+#        )
+#cdesig=c('B', 'B',  '3004', '3004', 'B', 'B')           
+#              '1_2444_44_1-2', '2_2444_44-', '3_ByxRM_51-_1-2', 
+#              '4_ByxRM_51-', '0_BYxRM_480MatA_1', '0_BYxRM_480MatA_2')
+#cdesig=c('B','B', 'A', 'A', 'A', 'A')
+#cell.cycle.classification.names=c('set1', 'set2', 'set3', 'set4', 'set01', 'set02')
+#cell.cycle.classification.dir='results/cell_cycle/yeast_cc_annotations_v5/'
+#by visual inspection (might want to revist this classification)
+                # for 08-11,07
+#het.thresholds=c(2^5.2, 2^4.9, 2^5.6, 2^4.9, 2^6,2^5.5)
+                #for 1,2,3,4,0,0
+                 #c(2^6.1, 2^7.5, 2^7, 2^7.4, 2^6.5,2^6.5)
+
+
+#-----------------------------------------------------------------------------
+
+
