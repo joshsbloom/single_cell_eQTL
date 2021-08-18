@@ -48,7 +48,7 @@ experiments=list(
     '18_3051_May10'=names(crosses.to.parents)[2])
 
 #good crosses A, B, 3004, 3008, 2999, 3001, 3003, 3028
-
+#14 ... 375
 good.dips=list(
     '12_Group_1_diploids_3004_2444_3051_5k_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
     '13_Group1_diploids_3004_2444_3051_7point5K_Feb_21'=names(crosses.to.parents)[c(2,4,14)],
@@ -58,34 +58,60 @@ good.dips=list(
     '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(13,16)],
     '18_3051_May10'=names(crosses.to.parents)[2])
 
+preprocess=F
 
-for(experiment.name in names(experiments)){
+for(experiment.name in names(experiments)[-c(1,2)]){
     input.diploids=experiments[[experiment.name]]
     print(input.diploids)
     #for output 
     dir.create(paste0(results.base.dir,experiment.name))
+    
     data.dir=paste0(data.base.dir, experiment.name, '/')
 
-    #vname=paste0(variants[[1]],'_', variants[[2]])
-    ase.Data=buildASE_data(data.dir, experiment.name)
-    saveRDS(ase.Data, paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
+    if(preprocess) {
+        #vname=paste0(variants[[1]],'_', variants[[2]])
+        ase.Data=buildASE_data(data.dir, experiment.name)
+        saveRDS(ase.Data, paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
 
-    dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, ncores=8)
-    dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
-    #overwrite dip.Assignments to include likelihood, counts, and umap
-    dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, by='barcode'), dip.specificCounts)
-    saveRDS(dip.Assignments, paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+        dip.Assignments=getDipAssignments(ase.Data, input.diploids, crosses.to.parents, ncores=8)
+        dip.specificCounts=countDiploidSpecificVariants(ase.Data, input.diploids, crosses.to.parents)
+        #overwrite dip.Assignments to include likelihood, counts, and umap
+        dip.Assignments=dplyr::left_join(dplyr::left_join(ase.Data$um, dip.Assignments, by='barcode'), dip.specificCounts)
+        saveRDS(dip.Assignments, paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+    } else{
+         ase.Data=readRDS(paste0(results.base.dir,experiment.name,'/','aseData.RDS'))
+         dip.Assignments=readRDS(paste0(results.base.dir,experiment.name,'/','diploid_assignments.RDS'))
+    }
+
+
 
     for(dip in input.diploids) {
         #dip='A'
-        phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
-        saveRDS(phasedCounts, file=paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
+        if(preprocess) {
+            phasedCounts=getPhasedCountsPerTranscript(ase.Data, dip.Assignments, dip, sgd.genes, crosses.to.parents) 
+            saveRDS(phasedCounts, file=paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
+        } else {
+            phasedCounts=readRDS(paste0(results.base.dir,experiment.name,'/','phasedCounts_',dip,'.RDS'))
+
+        }
 
         bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data)
         saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
-        
+
+        #get cell cycle data
+        cc.table=readr::read_csv(paste0("/data/single_cell_eQTL/yeast/results/cell_cycle/",experiment.name,'/',dip, '/', 'cell_cycle_assignments.csv'))[,-1]
+     if(length(table(cc.table$cell_cycle))>1) {
+        #use hand annotation for cell cycle
+        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.table, "manual")
+        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.RDS'))
+
+        #use seurat for cell cycle annotation
+        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.table, "seurat")
+        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCseurat.RDS'))
+
         nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data)
         saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+    }
     }
 }
 

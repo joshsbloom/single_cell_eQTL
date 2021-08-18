@@ -328,7 +328,7 @@ getPhasedCountsPerTranscript=function(ase.Data, dip.Assignments, dip,
 
 
 doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
-                            nUMI.thresh=10000,informativeCellThresh=64,threads=48) {
+                            nUMI.thresh=10000,informativeCellThresh=64,threads=48 ) {
   #nUMI.thresh=10000
   #informativeCellThresh=64
   classified.cells=dip.Assignments$diploid_name==dip
@@ -376,6 +376,72 @@ doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
   bbin.model.results=left_join(bbin.model.coefs, bbin.model.stats)
   return(bbin.model.results)
 }
+
+doBetaBinomialTestCC=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.table.in, cc.choice,
+                            nUMI.thresh=10000,informativeCellThresh=64,threads=48 ) {
+  #nUMI.thresh=10000
+  #informativeCellThresh=64
+  selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip & 
+                                            dip.Assignments$barcode %in% cc.table.in$cell_name &
+                                            ase.Data$numi<nUMI.thresh ]
+ 
+  # classified.cells=dip.Assignments$diploid_name==dip
+  #cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
+  p1=phasedCounts[[1]][selected.barcodes, ] #cells.to.keep,]
+  p2=phasedCounts[[2]][selected.barcodes, ] #cells.to.keep,]
+  gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
+  informativeCellsPerTranscript=colSums(gInfoTotals>0)
+  genes.to.test=names(informativeCellsPerTranscript)[informativeCellsPerTranscript>informativeCellThresh]
+  cc.table.s=cc.table.in[match(selected.barcodes, cc.table.in$cell_name),]
+
+  #ef=rnorm(nrow(p2))
+  #TO DO: build this (ef) into the ase.Data data structure 
+  if(  length(unique(ase.Data$experiment.factor)) > 1 ) { 
+      ef=as.factor(ase.Data$experiment.factorNULL[cells.to.keep,])
+  } else {
+      ef=NULL
+  }
+
+  if(cc.choice=='manual'){
+     cc=as.factor(cc.table.s$cell_cycle)
+     cc=relevel(cc, 'M/G1')
+  } 
+  if(cc.choice=='seurat'){
+     cc=as.factor(cc.table.s$seurat_clusters)
+     cc=relevel(cc, names(table(cc))[which.max(table(cc))] ) # 'M/G1')
+  }
+
+
+  bbin=mclapply(genes.to.test,
+    function(g,...){
+        ex=cbind(p2[,g],p1[,g])
+        print(g)
+               if(is.null(ef)){
+            m=(glmmTMB(ex~cc,family=glmmTMB::betabinomial(link='logit'))) 
+        } else{
+            m=(glmmTMB(ex~ef+cc,family=glmmTMB::betabinomial(link='logit'))) 
+        }
+        result=list()
+        result$stats=NULL
+        result$coefs=NULL
+        result$gene = g
+        if(!is.na(logLik(m))) {
+            result$stats=glance(m)
+            result$coefs= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
+        }
+        return(result)
+    },p1,p2,ef,cc,mc.cores=threads)
+  names(bbin)= sapply(bbin, function(x) x$gene) #genes.to.test[1:240]
+
+  bbin.model.stats=rbindlist(lapply(bbin, function(x) x$stats),idcol='gene', fill=T)
+  bbin.model.coefs=rbindlist(lapply(bbin[bbin.model.stats$gene[!is.na(bbin.model.stats$logLik)]], 
+                                    function(x) { x$coefs}),
+                                        #tidy(x, effects='fixed', component="cond", exponentiate=T, conf.int=T)),
+                             idcol='gene', fill=T)
+  bbin.model.results=left_join(bbin.model.coefs, bbin.model.stats)
+  return(bbin.model.results)
+}
+
 
 
 #come on broom.mixed, why no function to extract tidy info for disp part of glm fit
@@ -434,20 +500,33 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         geno=setup.vars$geno
         ef=setup.vars$ef
         if(is.null(ef)){
-            m=glmmTMB(y~geno+(1|cellIDf)+offset(of2), dispformula=~geno, family=nbinom2(link='log'))
+            #remove random effect of cell
+            #(1|cellIDf)+
+            m0=glmmTMB(y~geno+offset(of2), family=nbinom2(link='log'))
+            m =update(m0, dispformula=~geno) 
+            #m=glmmTMB(y~geno+(1|cellIDf)+offset(of2), dispformula=~geno, family=nbinom2(link='log'))
         }
         else {
-            m=glmmTMB(y~ef+geno+(1|cellIDf)+offset(of2), dispformula=~geno, family=nbinom2(link='log'))
+            #(1|cellIDf)+
+            m0=glmmTMB(y~ef+geno+offset(of2), family=nbinom2(link='log'))
+            m =update(m0, dispformula=~geno) 
+
         }
         result=list()
-        result$stats=NULL
-        result$coefs.cond=NULL
-        result$coefs.disp=NULL
+        result$stats.red=NULL
+        result$coefs.cond.red=NULL
+
+        result$stats.full=NULL
+        result$coefs.cond.full=NULL
+        result$coefs.disp.full=NULL
+       
         result$gene = g
         if(!is.na(logLik(m))) {
-            result$stats=glance(m)
-            result$coefs.cond= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
-            result$coefs.disp= tidyDisp(m)
+            result$stats.red=glance(m0)
+            result$coefs.cond.red= tidy(m0, effects='fixed', component="cond", exponentiate=F, conf.int=F)
+            result$stats.full=glance(m)
+            result$coefs.cond.full= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
+            result$coefs.disp.full= tidyDisp(m)
 
         }
         return(result)
@@ -457,10 +536,22 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
 
  names(nbin)= sapply(nbin, function(x) x$gene) #genes.to.test[1:240]
 
- nbin.model.stats=rbindlist(lapply(nbin, function(x) x$stats),idcol='gene', fill=T)
- nbin.model.coefs=rbindlist(lapply(nbin[nbin.model.stats$gene[!is.na(nbin.model.stats$logLik)]], 
-                                    function(x) { rbind(x$coefs.cond, x$coefs.disp)}),
+ nbin.model.stats.full=rbindlist(lapply(nbin, function(x) x$stats.full),idcol='gene', fill=T)
+ nbin.model.stats.red=rbindlist(lapply(nbin, function(x) x$stats.red),idcol='gene', fill=T)
+
+ nbin.model.coefs.full=rbindlist(lapply(nbin[nbin.model.stats.full$gene[!is.na(nbin.model.stats.full$logLik)]], 
+                                    function(x) { rbind(x$coefs.cond.full, x$coefs.disp.full)}),
                              idcol='gene', fill=T)
- nbin.model.results=left_join(nbin.model.stats, nbin.model.coefs, by='gene')
+ 
+ nbin.model.coefs.red=rbindlist(lapply(nbin[nbin.model.stats.full$gene[!is.na(nbin.model.stats.full$logLik)]], 
+                                    function(x) { rbind(x$coefs.cond.red, x$coefs.disp.red)}),
+                             idcol='gene', fill=T)
+
+ nbin.model.results.full=left_join(nbin.model.stats.full, nbin.model.coefs.full, by='gene')
+
+ nbin.model.results.red=left_join(nbin.model.stats.red, nbin.model.coefs.red, by='gene')
+
+ nbin.model.results=left_join(nbin.model.results.full, nbin.model.results.red, by=c('gene','effect', 'term'), suffix=c('', '.red'))
+
  return(nbin.model.results)
 }
