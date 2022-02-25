@@ -114,6 +114,7 @@ nbLL=function (y, mu, theta)  {
 }
 # fast calculation of negative binomial LL across the genome if theta is known 
 domap=function(gn, ...) { 
+       print(gn)
        theta.est=thetas[gn]
        YY=Y[,gn]
        nbn=negative.binomial(theta=theta.est,link='log')
@@ -180,11 +181,56 @@ doCisNebula2=function(x,...) { # mmp1,counts,Gsub){
         mmpN=cbind(mmp1, Gsub[,x$marker[1]])
         yind=match(x$transcript, rownames(counts))
         NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
+        
+        #NBcis$summary$gene=rownames(counts)[yind]
+        return(NBcis)
+    }
+
+#for the original ByxRM with repeated measures
+doCisNebula3=function(x,...) { # mmp1,counts,Gsub){
+       
+        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
+        yind=match(x$transcript, rownames(counts))
+       
+        df=data.frame(id=factor(best_match_seg))
+      
+        mmpN=mmpN[order(df$id),]
+        countmat=counts[yind,order(df$id)]
+        df.id=df[order(df$id),]
+
+        NBcis=nebula(count=countmat, id=df.id, pred=mmpN) 
+
+        #NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
         NBcis$summary$gene=rownames(counts)[yind]
         return(NBcis)
     }
 
+#logistic regression mapping (for discrete cycle classification assignments ) 
+domap_logistic=function(gn,...) {
+    YY=cc.incidence[,gn]
+    DM=mmp1
+    fnbrN=fastglmPure(DM, YY, family=binomial())
+    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
 
+    LRS=rep(NA,ncol(Gsub))
+    names(LRS)=colnames(Gsub)
+
+    #initialize the last column of DM to be 1s
+    XXn=cbind(DM,1)
+    idx=1:ncol(Gsub)
+    gcovn=(ncol(XXn))
+    for(gx in idx) { 
+       #colnames(Gsub)){
+        XXn[,gcovn]=Gsub[,gx]
+        fnbrF=fastglmPure(XXn, YY,  family=binomial())
+        #can just use deviances here 
+        LRS[gx]=fnbrN$deviance-fnbrF$deviance
+           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+   }
+    return(LRS)
+}
+
+       
 chroms=paste0('chr', as.roman(1:16)) 
 #c('I','II', 'III', 'IV', 'V', 'X')
 
@@ -267,7 +313,19 @@ cdesig=as.vector(sapply(cList, function(x) x))
 het.thresholds=as.vector(sapply(hList, function(x) x))
 data.dirs=paste0(base.dir, 'processed/', experiments, '/')
 het.across.cells.threshold=.1
-              
+
+cl <- makeCluster(36)
+clusterEvalQ(cl, {
+       library(fastglm)
+       library(Matrix)
+       library(MASS) 
+       library(nebula)
+       NULL  })
+
+nUMI_thresh=10000
+minInformativeCellsPerTranscript=128
+
+
 #note sgd gene def is updated to include 3' utr               
 #sgd.genes=sgd.granges[sgd.granges$type=='gene',]
 #sgd.genes$gcoord=gcoord.key[as.character(seqnames(sgd.genes))]+start(sgd.genes)
@@ -361,21 +419,561 @@ for(ee in c(1:6,13:16) ) { #5:length(experiments)){
 }
 
 
+
+
+
+# combine experiments
+sets=list(
+    '3004'=c(9,10),
+    'A'=c(3,4),
+    #'B'=c(1,2,7,8,
+    'B'=c(11,12))
+
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    dir.create(comb.out.dir)
+    
+    exp.results=list()
+
+    for( ee in  sets[[set]] ) { 
+        experiment=experiments[ee]
+        print(ee)
+        print(experiment)    
+        #cross=crossL[[cdesig[ee]]]
+        #parents=parentsL[[cdesig[ee]]]
+        data.dir=data.dirs[ee]
+        results.dir=paste0(base.dir, 'results/', experiment, '/')
+
+        #read in transcript counts 
+        counts=readRDS(paste0(results.dir, 'counts.RDS'))
+
+        #read in geno informative counts
+        g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
+        
+        rsum=apply(g.counts$ref.counts,1, sum)
+        asum=apply(g.counts$alt.counts,1, sum)
+        af=(rsum/(rsum+asum))
+        #af[(rsum+asum)<10]=NA
+        af=data.frame(chr=tstrsplit(names(af), '_')[[1]], pos=as.numeric(tstrsplit(names(af), '_')[[2]]), 
+                      rsum=rsum, asum=asum, tcnt=rsum+asum, af=af)
+        af$chr=factor(af$chr, levels=paste0('chr', as.roman(1:16)))
+
+        af%>%filter(tcnt>10) %>% ggplot(aes(x=pos,y=af,color=log2(tcnt))) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+            geom_point() + 
+            scale_colour_viridis_c()+
+            xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+            facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+            theme_classic()+
+            theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+            theme(panel.spacing=unit(0, "lines"))+
+            ggtitle(experiment)
+            ggsave(paste0(results.dir, 'seg_af.png'), width=22, height=5)
+        
+        # read in genetic map and format for plotting
+        # gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
+        # gmap.subset=gmapC[match(rownames(g.counts[[1]]), paste0(gmapC$chrom, '_', gmapC$ppos)),]
+        # gmap.ss=split(gmap.subset, gmap.subset$chrom) 
+       
+        #get hmm genotype probs 
+        vg=getSavedGenos(chroms, results.dir, type='genoprobs')
+        m.granges=getMarkerGRanges(g.counts)
+        m.granges$gcoord=gcoord.key[as.character(seqnames(m.granges))]+start(m.granges)
+        m.granges$sname=colnames(vg)
+
+        #add additional hard filter for umis per cell
+        classification = readRDS(paste0(results.dir, 'cellFilter.RDS'))
+
+        #add additional hard filter for umis per cell
+        classification = classification & colSums(counts)<nUMI_thresh
+
+        #matches data to cell.covariates
+        counts=counts[,names(classification)[classification]] #cell.covariates$barcode]
+        vg=vg[names(classification)[classification],] #cell.covariates$barcode,]
+      
+        # regression based classifier to kick out lousy segs
+        uncertainMarkerCount=rowSums(vg<.95 & vg>.05) 
+        countsPerCell=colSums(counts)
+       
+        #png(file=paste0(results.dir, 'additional_seg_filter.png'), width=1024,height=1024)
+        plot(log2(countsPerCell), log2(uncertainMarkerCount), 
+             xlab='log2(total UMIs per cell)', ylab='log2(uncertain marker count)',main=experiment,sub=ncol(counts)
+        )
+        seg.classifier.resids=residuals(lm(log2(uncertainMarkerCount)~log2(countsPerCell)))
+        outlier.segs=seg.classifier.resids>quantile(seg.classifier.resids, .995)
+        ##points(xx[,1][xx3>quantile(xx3,.995)], xx[,2][xx3>quantile(xx3,.995)], col='blue')
+        points(log2(countsPerCell)[outlier.segs], log2(uncertainMarkerCount)[outlier.segs], col='blue') 
+        #dev.off()
+
+        classifier.name2=names(outlier.segs)[!outlier.segs]
+       
+        counts=counts[,classifier.name2]
+        vg=vg[classifier.name2,]
+
+        cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
+        cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
+        cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
+        cc.df=cc.df[cc.df$cell_name %in% rownames(vg),]
+
+        vg=vg[cc.df$cell_name,]
+        counts=counts[,cc.df$cell_name]
+
+        exp.results[[as.character(ee)]]$counts=counts
+        exp.results[[as.character(ee)]]$vg=vg
+        exp.results[[as.character(ee)]]$m.granges=m.granges
+        exp.results[[as.character(ee)]]$cell.cycle=cc.df
+    }    
+
+    #combine data sets (investigate size differences (markers) between the different replicates of the 2444 crosses TO DO) 
+    vg=do.call('rbind', lapply(exp.results, function(x) x$vg) )
+    #rbind(exp.results[[as.character(set.3004[1])]]$vg,exp.results[[as.character(set.3004[2])]]$vg)
+    counts=do.call('cbind', lapply(exp.results, function(x) x$counts) )#
+    #cbind(exp.results[[as.character(set.3004[1])]]$counts,exp.results[[as.character(set.3004[2])]]$counts)
+    m.granges=exp.results[[1]]$m.granges
+    cc.df=do.call('rbind', lapply(exp.results, function(x) x$cell.cycle) )
+        #rbind(exp.results[[as.character(set.3004[1])]]$cell.cycle,exp.results[[as.character(set.3004[2])]]$cell.cycle)
+
+    pruned=LDprune(vg, m.granges)
+    Gsub=pruned$Gsub
+    markerGRr=pruned$markerGRr
+    rm(pruned)
+
+    infoCells=rowSums(counts>0)
+    expressed.transcripts=names(infoCells)[(infoCells>minInformativeCellsPerTranscript)] #names(sum(infoCells>128)) #[infoCells>128,]
+
+    #select only the transcripts expressed in enough cells 
+    Yr=t(counts[expressed.transcripts,])
+    transcript.features=data.frame(gene=colnames(Yr), non.zero.cells=colSums(Yr>1), tot.expression=colSums(Yr))
+
+    #cisMarkers=cisMarkers[cisMarkers$transcript %in% expressed.transcripts,]
+    #if no subsetting this is not necessary
+    #cMsubset=cisMarkers[which(cisMarkers$transcript %in% colnames(Yr)),]
+
+    barcode.features=data.frame(barcode=colnames(counts), nUMI=colSums(counts))
+
+    #replace log(counts)
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp1)[3]='experiment'
+    
+    print("calculating dispersions")
+
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+              
+            df=data.frame(id=factor(best_match_seg))
+            mmp2=mmp1[order(df$id),]
+            countmat=counts[expressed.transcripts,order(df$id)]
+            df.id=df[order(df$id),]
+            nullNB=nebula(count=countmat, id=df.id, pred=mmp2) 
+    } else {
+           nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
+    }
+    
+    dispersion.df=data.frame(gene=nullNB$summary$gene, theta.null=1/nullNB$overdispersion[,2])
+    
+    cisMarkers=getCisMarker(sgd.genes[sgd.genes$gene_id %in% dispersion.df$gene,],
+                            markerGRr, t(Yr[,colnames(Yr) %in% dispersion.df$gene]) ) #counts)
+    cSplit=split(cisMarkers, cisMarkers$marker)
+
+
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+         clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
+          system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
+        } else {
+             clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
+             system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
+    }
+    names(cisNB)=names(cSplit)
+
+    saveRDS(cisNB, file=paste0(comb.out.dir, 'cisNB2.RDS'))
+    cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
+    names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+
+    png(file=paste0(comb.out.dir, 'cis_p_hist.png'), width=512,height=512)
+    hist(cis.ps,breaks=50, main=paste(experiment, 'n cells=', nrow(Yr)) , sub=sum(p.adjust(cis.ps,'fdr')<.05))
+    dev.off()
+
+    #here we define covariates 
+    thetas=as.vector(1/unlist(sapply(cisNB, function(x) x$overdispersion$Cell)))
+    names(thetas)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+    
+    cisModel.df=data.frame(gene=names(thetas),theta.cis=thetas)
+    dispersion.df=left_join(dispersion.df, cisModel.df, by='gene')
+    saveRDS(dispersion.df, file=paste0(comb.out.dir, 'dispersions.RDS'))
+
+    #need to add the marker data structure here 
+    segDataList=list(Yr=Yr, 
+                        Gsub=Gsub,
+                        cisMarkers=cisMarkers, 
+                        transcript.features=transcript.features,
+                        barcode.features=barcode.features,
+                        dispersion.df=dispersion.df,
+                        cell.cycle.df=cc.df
+    )
+    rm(vg)
+    rm(exp.results)
+    saveRDS(segDataList, file=paste0(comb.out.dir, 'segData.RDS'))
+}
+
+
+#glm (y ~ cc + gt)
+#glm (y ~ gt) for each cell cycle
+#glm(y ~ gt * cc) - stretch goal 
+#Noise:
+#Glm (y ~ cc + gt, dispersion = ~ gt)
+#Glm (y ~ gt, dispersion = ~ gt) for each cell cycle
+#Cell cycle QTL:
+#Y(cell cycle) ~ gt
+#Y(seurat clustering) ~ gt
+
+#mapping eQTL within each cell cycle classification for each experiment together 
+#for(ee in c(7,1:4,8:10,11,12)) {  #,15,16)) { #1:length(experiments)){
+#for(ee in c(15,16)) { #1:length(experiments)){
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+    
+    cc.df=segDataList$cell.cycle.df
+
+    mmp0=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp0)[3]='experiment'
+
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+
+    #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
+    for(cn in cnv ){
+        print(cn)
+        Gsub=segDataList$Gsub[cc.df$cell_name,]
+        Yr=segDataList$Yr[cc.df$cell_name,]
+
+        mmp1=mmp0 
+        cells.in.cycle=cc.matrix.manual[,cn]==1
+        mmp1=mmp1[cells.in.cycle,]
+        Gsub=Gsub[cells.in.cycle,]
+        Yr=Yr[cells.in.cycle,]
+
+        print('calculating LODs')
+        #Yks=Matrix(Yr, sparse=T)
+        clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
+        clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
+        LOD=do.call('rbind', parLapply(cl, names(thetas)[!is.na(thetas)], domap) )
+        LOD[is.na(LOD)]=0
+        LOD=LOD/(2*log(10))
+        rownames(LOD)=names(thetas)[!is.na(thetas)]
+        cnn=gsub('/',':', cn)
+        saveRDS(LOD, file=paste0(comb.out.dir, 'LOD_NB_', cnn,'.RDS'))
+        msig=which(LOD>4, arr.ind=T)
+        png(file=paste0(comb.out.dir, 'seg_diagnostic_plot_', cnn, '.png'), width=768,height=768)
+        plot(msig[,2], msig[,1])
+        dev.off()
+    }
+}
+
+# mapping cell cycle classifications 
+for(set in names(sets)[-1]){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+    
+    cc.df=segDataList$cell.cycle.df
+
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp1)[3]='experiment'
+
+   # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+
+    clusterExport(cl, varlist=c("Gsub", "mmp1", "cc.incidence", "domap_logistic"))
+    #clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
+    LOD=do.call('rbind', parLapply(cl, colnames(cc.incidence), domap_logistic) )
+    LOD[is.na(LOD)]=0
+    LOD=LOD/(2*log(10))
+    rownames(LOD)=colnames(cc.incidence)
+    #dir.create(paste0(base.dir, 'results/cell_cycle_v5/', experiment,'/'))
+    saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
+
+    pdf(file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.pdf'), width=10, height=5)
+    for(i in 1:nrow(LOD)){
+        plot(LOD[i,],main=rownames(LOD)[i], ylab='LOD', xlab='marker index')
+        abline(v=cumsum(c(0,rle(tstrsplit(colnames(Gsub), '_')[[1]])$lengths)), lty=2, col='blue')
+    }
+    dev.off()
+}
+
+getGlobalPeaks=function( LODr,markerGR,transcript.data, 
+                        chroms=paste0('chr', as.roman(1:16)),
+                        fdrfx.fc=NULL) {
+    cPeaksT=list()
+    for(cc in chroms) {
+        print(cc)
+        moi=grep(paste0('^',cc,'_'), colnames(LODr))
+        rS=LODr[,moi]
+        #mstat=apply(rS,1,max)
+        mstat.pos=Rfast::rowMaxs(abs(rS),value=F) #1,which.max)
+        lookup=cbind(1:length(mstat.pos), mstat.pos)
+        mstat=rS[lookup]
+        LODstat=LODr[,moi][lookup]
+        CIs=matrix(NA,length(mstat),2)
+        cmoi=colnames(LODr[,moi])
+        #this could use a speedup
+        for(peak in 1:length(mstat)){
+            LODrv=LODr[peak,moi]
+            CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
+        }   
+        cPeaksT[[cc]]=data.frame( transcript=rownames(rS),
+                             peak.marker=colnames(rS)[mstat.pos],
+                             CI.l=CIs[,1],
+                             CI.r=CIs[,2],
+                             LOD=LODstat)
+        if(!is.null(fdrfx.fc)){
+           cPeaks[[cc]]$FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat)
+           cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
+           cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
+        }
+    }
+ 
+    cP=rbindlist(cPeaksT, idcol='chrom')
+    cP$peak.marker=as.character(cP$peak.marker)
+    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
+    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
+    cP$CI.l=as.character(cP$CI.l)
+    cP$CI.r=as.character(cP$CI.r)
+    cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
+    cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
+  
+    cP$tchr=as.character(transcript.data$chromosome_name)[match(cP$transcript, transcript.data$gene_id)]
+    cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$gene_id)]
+    cP=cP[cP$tchr %in% rev(chroms), ]#c("X","V","IV","III","II","I"),]
+    cP$tchr=factor(cP$tchr,levels=rev(chroms)) #c("X","V","IV","III","II","I"))
+    cP$chr=factor(cP$chr,levels=chroms)        #rev(c("X","V","IV","III","II","I")))
+    return(cP)
+}
+
+
+plotEQTL=function(cPf, titleme='',CI=T) {
+  a=ggplot(cPf,aes(x=pos,y=tpos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_point()+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(tchr~chr,scales="free", space='free')+
+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+    if(CI) {
+        a=a+geom_segment(aes(x = CI.l, y = tpos, xend = CI.r, yend = tpos)) 
+    }
+    return(a)
+}
+
+plotHotspot=function(cPf, titleme='') {
+      h=ggplot(cPf,aes(x=pos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_histogram(binwidth=50000)+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+
+    hd=ggplot_build(h)$data[[1]]
+    sig.hp=qpois(1-(.05/length(hd$y)),ceiling(mean(hd$count)))+1 
+    h+geom_hline(yintercept=sig.hp)
+}
+
+plotHotspot2=function(cPf, titleme='') {
+      h=ggplot(cPf,aes(pos,count)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_bar(stat="identity", width=50000)+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+
+       sig.hp=qpois(1-(.05/length(cPf$pos)),ceiling(mean(cPf$count)))+1 
+    h+geom_hline(yintercept=sig.hp)
+}
+
+
+
+cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
+sgd.genes$chromosome_name=seqnames(sgd.genes)
+sgd.genes$start_position=start(sgd.genes)
+
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+    
+    cc.df=segDataList$cell.cycle.df
+
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp1)[3]='experiment'
+
+   # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+   
+    L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cycle.cats[1],'.RDS'))
+    addL=L
+    addL[is.numeric(addL)]=0
+
+    for(cc in cycle.cats) {
+        L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cc,'.RDS'))
+        GP=getGlobalPeaks(L,markerGR,sgd.genes)
+        saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
+        plotEQTL(GP[GP$LOD>4,], titleme=cc)
+    
+        ggsave(file=paste0(comb.out.dir,'/LOD_NB_', cc, '.png'), width=10, height=10)
+
+        addL=addL+L
+    }
+
+        GP=getGlobalPeaks(addL,markerGR,sgd.genes)
+        saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+        plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
+        ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+
+}
+
+#}
+
+
+makeBinTable=function(cPf, cbin50k) {
+    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
+
+    tlink.cnt=countOverlaps(unlist(cbin50k), tlinks)
+    bin.table=data.frame(chr=seqnames(unlist(cbin50k)),
+                         pos=round(start(unlist(cbin50k))+25000),
+                         count=tlink.cnt)
+    return(bin.table)
+}
+
+for(set in names(sets)){
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+   
+    Gsub=segDataList$Gsub
+
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+
+
+
+
+
+    cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
+    cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
+
+    cbin=data.frame(chr=names(cmin),
+                    start=cmin,
+                    end=cmax, 
+                    strand="*")
+    cbin=makeGRangesFromDataFrame(cbin)
+    ###########################################################################################################3
+    # analyze within each sub experiment 
+    cbin50k=GenomicRanges::tile(cbin, width=50000)
+
+
+    #read cell cycle LODs
+
+    ccLOD=readRDS(file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
+    ccLOD=ccLOD[1:5,]
+    rownames(ccLOD)=gsub('cell_cycle', '', rownames(ccLOD))
+    #tidyr::gather(t(data.frame(ccLOD)), key="cell_cycle", value="LOD")
+    df=data.frame(chr=as.character(seqnames(markerGR)), pos=start(markerGR), t(ccLOD))
+    df=tidyr::gather(df, key="cell_cycle", value="LOD", -chr,-pos)
+
+
+    ccLOD=ggplot(df,aes(pos,LOD)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_line()+
+        xlab('')+ylab('')+
+        # scale_alpha(guide = 'none') + 
+        facet_grid(cell_cycle~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+scale_y_continuous(expand = c(0, 0), limits = c(0, NA))+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        #theme(panel.spacing=unit(0, "lines"))+
+        geom_hline(aes(yintercept=4, colour='red'))+theme(legend.position='none')+
+        ggtitle(set)
+
+   ggsave(file=paste0(comb.out.dir,'/cell_cycle_assignment_LOD.png'), width=10, height=8)
+    
+
+
+    GP=readRDS(file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+  
+    # plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
+    cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+    
+    bin.table=makeBinTable(cPf, cbin50k)
+
+    cH=plotHotspot2(bin.table,titleme=set)
+
+
+ 
+    hlist=list()
+    for(cc in cycle.cats) {
+         GP=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
+         cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+         hlist[[cc]]=plotHotspot2(makeBinTable(cPf,cbin50k), titleme=cc)
+     }
+    
+    ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
+        ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
+}
+
+#    plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
+#    ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+#
+
 #sgd.genes=sgd.granges[sgd.granges$type=='gene',]
 
-cl <- makeCluster(36)
-clusterEvalQ(cl, {
-       library(fastglm)
-       library(Matrix)
-       library(MASS) 
-       library(nebula)
-       NULL  })
 
-nUMI_thresh=10000
-minInformativeCellsPerTranscript=128
-#for(ee in c(2,4,7:12,15,16)) { #1:length(experiments)){
-for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){
-#for(ee in c(15,16)) { #1:length(experiments)){
+
+#ByxRM previously genotypoed
+
+
+
+
+#for(ee in c(2,4,7:12,15,16)) { #1:length(experiments)){}}
+#for(ee in c(15,16)) { #1:length(experiments)){}}
+#c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments)){}}
+for(ee in c(13,14) ) { 
 
     experiment=experiments[ee]
     print(ee)
@@ -429,6 +1027,34 @@ for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments))
     classifier.name2=names(outlier.segs)[!outlier.segs]
     counts=counts[,classifier.name2]
     vg=vg[classifier.name2,]
+
+    #code to match original BYxRM with previous genotypes -------------------
+    # load previous data 
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+        load('/data/eQTL/gdata_42k.RData')
+        prevG=gdata
+        rm(gdata)
+        colnames(prevG)=gsub(':', '_', colnames(prevG))
+        scname=tstrsplit(colnames(prevG),'_')
+        scname=paste0(scname[[1]], '_', scname[[2]], '_', tstrsplit(scname[[3]],'/')[[1]], '_',tstrsplit(scname[[3]],'/')[[2]] )
+        colnames(prevG)=scname
+
+    # line up with existing genotypes 
+        vg2=vg
+        vg2name=tstrsplit(colnames(vg2), '_')
+        colnames(vg2)=paste0(vg2name[[1]], '_', vg2name[[2]], '_', vg2name[[3]], '_', vg2name[[4]])
+
+        matchingmarkers=colnames(vg2)[colnames(vg2) %in% colnames(prevG)]
+        vg2=vg2[,matchingmarkers]
+        prevG=prevG[,matchingmarkers]
+        stvg2=scale(t(vg2))
+        sprevG=scale(t(prevG))   
+    # find best match genotype
+        allcors=crossprod(stvg2, sprevG)/(nrow(sprevG)-1)
+        best_match_seg=rownames(prevG)[(apply(allcors, 1 , which.max))]
+        best_match_seg.r=apply(allcors, 1 , max)
+        rm(prevG); rm(vg2); rm(stvg2); rm(sprevG)
+    }
 
     #plot(log2(rowSums(Yr)), uncertainMarkerCount)
     #xx=cbind(log2(rowSums(Yr)), log2(uncertainMarkerCount))
@@ -491,17 +1117,19 @@ for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments))
     cSplit=split(cisMarkers, cisMarkers$marker)
    
     print("calculating dispersions")
-    clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
-    system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+         clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
+         system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
+
+    } else {
+         clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
+         system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
+   
+         #982
+    }
     names(cisNB)=names(cSplit)
 
-    #cisNB=mclapply(cSplit, function(x,...) {
-    #    mmpN=cbind(mmp1, Gsub[,x$marker[1]])
-    #    yind=match(x$transcript, rownames(counts))
-    #    NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
-    #    NBcis$summary$gene=rownames(counts)[yind]
-    #    return(NBcis)
-    #    },mmp1,cisMarkers,Gsub,counts, mc.cores=24)
+
     saveRDS(cisNB, file=paste0(results.dir, 'cisNB2.RDS'))
     cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
     names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
@@ -513,8 +1141,18 @@ for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments))
     #here we define covariates 
     thetas=as.vector(1/unlist(sapply(cisNB, function(x) x$overdispersion$Cell)))
     names(thetas)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+    
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+          
+        df=data.frame(id=factor(best_match_seg))
+        mmp2=mmp1[order(df$id),]
+        countmat=counts[expressed.transcripts,order(df$id)]
+        df.id=df[order(df$id),]
+        nullNB=nebula(count=countmat, id=df.id, pred=mmp2) 
+    } else {
+        nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
+    }
 
-    nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
     dispersion.df=data.frame(gene=nullNB$summary$gene, theta.null=1/nullNB$overdispersion[,2])
     cisModel.df=data.frame(gene=names(thetas),theta.cis=thetas)
     dispersion.df=left_join(dispersion.df, cisModel.df, by='gene')
@@ -531,11 +1169,51 @@ for(ee in c(15,16) ) { #c(1:4,7:10,11,12)) { #,15,16)) { #1:length(experiments))
     saveRDS(segDataList, file=paste0(results.dir, 'segData.RDS'))
 }
 
-#mapping eQTL
 
-for(ee in c(7,1:4,8:10,11,12)) {  #,15,16)) { #1:length(experiments)){
-#for(ee in c(15,16)) { #1:length(experiments)){
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# mapping within each cell cycle category
+for (ee in c(1:4,7:12) ) {
     experiment=experiments[ee]
     print(ee)
     print(experiment)    
@@ -557,11 +1235,112 @@ for(ee in c(7,1:4,8:10,11,12)) {  #,15,16)) { #1:length(experiments)){
 
     # replace if barcode.features is present
     #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)))
-     mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
-
+  
     #could switch between thetas here 
     thetas=dispersion.df$theta.cis
     names(thetas)=dispersion.df$gene
+
+
+    cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
+    cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
+    #cell_cycle != "ALPHA" &
+   
+    cc.df=cc.df[cc.df$cell_name %in% rownames(Gsub),]
+    cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
+   
+    Gsub=Gsub[cc.df$cell_name,]
+    Yr=Yr[cc.df$cell_name,]
+
+    print(all.equal(cc.df$cell_name, rownames(Gsub)))
+
+    mmp0=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    
+    #model per cell cycle classification
+    for(cn in colnames(cc.matrix.manual)){
+         
+        Gsub=segDataList$Gsub[cc.df$cell_name,]
+        Yr=segDataList$Yr[cc.df$cell_name,]
+
+        mmp1=mmp0 
+        cells.in.cycle=cc.matrix.manual[,cn]==1
+        mmp1=mmp1[cells.in.cycle,]
+        Gsub=Gsub[cells.in.cycle,]
+        Yr=Yr[cells.in.cycle,]
+
+        print('calculating LODs')
+        #Yks=Matrix(Yr, sparse=T)
+        clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
+        clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
+        LOD=do.call('rbind', parLapply(cl, names(thetas), domap) )
+        LOD[is.na(LOD)]=0
+        LOD=LOD/(2*log(10))
+        rownames(LOD)=names(thetas)
+        cnn=gsub('/',':', cn)
+        saveRDS(LOD, file=paste0(results.dir, 'LOD_NB_', cnn,'.RDS'))
+        msig=which(LOD>4, arr.ind=T)
+        png(file=paste0(results.dir, 'seg_diagnostic_plot_', cnn, '.png'), width=768,height=768)
+        plot(msig[,2], msig[,1])
+        dev.off()
+    }
+}
+
+
+
+#joint mapping with additive effect of cell cycle 
+for (ee in c(1:4,7:12) ) {
+    experiment=experiments[ee]
+    print(ee)
+    print(experiment)    
+    #cross=crossL[[cdesig[ee]]]
+    #parents=parentsL[[cdesig[ee]]]
+    data.dir=data.dirs[ee]
+    results.dir=paste0(base.dir, 'results/', experiment, '/')
+
+    segDataList=readRDS(file=paste0(results.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    #barcode.featues=segDataList$barcode.features
+
+    dispersion.df=segDataList$dispersion.df
+    counts=readRDS(paste0(results.dir, 'counts.RDS'))
+
+    # replace if barcode.features is present
+    #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)))
+  
+    #could switch between thetas here 
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+
+
+    cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
+    cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
+    #cell_cycle != "ALPHA" &
+   
+    cc.df=cc.df[cc.df$cell_name %in% rownames(Gsub),]
+    cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
+   
+    Gsub=Gsub[cc.df$cell_name,]
+    Yr=Yr[cc.df$cell_name,]
+
+    print(all.equal(cc.df$cell_name, rownames(Gsub)))
+
+    mmp0=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+
+
+
+    
+    Gsub=segDataList$Gsub[cc.df$cell_name,]
+    Yr=segDataList$Yr[cc.df$cell_name,]
+
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    mmp1=cbind(mmp0, cc.matrix.manual)
+
 
     print('calculating LODs')
     #Yks=Matrix(Yr, sparse=T)
@@ -571,42 +1350,22 @@ for(ee in c(7,1:4,8:10,11,12)) {  #,15,16)) { #1:length(experiments)){
     LOD[is.na(LOD)]=0
     LOD=LOD/(2*log(10))
     rownames(LOD)=names(thetas)
-    saveRDS(LOD, file=paste0(results.dir, 'LOD_NB3.RDS'))
+    saveRDS(LOD, file=paste0(results.dir, 'LOD_NB_joint.RDS'))
     msig=which(LOD>5, arr.ind=T)
-    png(file=paste0(results.dir, 'seg_diagnostic_plot_3.png'), width=768,height=768)
+    png(file=paste0(results.dir, 'seg_diagnostic_plot_joint.png'), width=768,height=768)
     plot(msig[,2], msig[,1])
     dev.off()
 }
 
 
 
-domap_logistic=function(gn,...) {
-    YY=cc.incidence[,gn]
-    DM=mmp1
-    fnbrN=fastglmPure(DM, YY, family=binomial())
-    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
 
-    LRS=rep(NA,ncol(Gsub))
-    names(LRS)=colnames(Gsub)
 
-    #initialize the last column of DM to be 1s
-    XXn=cbind(DM,1)
-    idx=1:ncol(Gsub)
-    gcovn=(ncol(XXn))
-    for(gx in idx) { 
-       #colnames(Gsub)){
-        XXn[,gcovn]=Gsub[,gx]
-        fnbrF=fastglmPure(XXn, YY,  family=binomial())
-        #can just use deviances here 
-        LRS[gx]=fnbrN$deviance-fnbrF$deviance
-           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
-   }
-    return(LRS)
-
-}
+cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
 
 #mapping cell-cycle
-for(ee in c(7,1:4,8:10,11,12,15,16)) {
+#for(ee in (7,1:4,8:10,
+for (ee in 15:16) {  #1,12,15,16)) {
  #   ee=3
      experiment=experiments[ee]
     print(ee)
@@ -632,8 +1391,15 @@ for(ee in c(7,1:4,8:10,11,12,15,16)) {
     mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
 
     #read cell cycle info
-    cc.df=read_csv(paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignments.csv'))
+    #cc.df=read_csv(paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignments.csv'))
+    cc.df=cc.big.table %>% dplyr::filter(cell_cycle != "ALPHA" & cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
+
     cc.df=cc.df[cc.df$cell_name %in% rownames(Gsub),]
+    cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
+   
+    Gsub=Gsub[cc.df$cell_name,]
+    Yr=Yr[cc.df$cell_name,]
+
     print(all.equal(cc.df$cell_name, rownames(Gsub)))
 
     mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
@@ -647,9 +1413,10 @@ for(ee in c(7,1:4,8:10,11,12,15,16)) {
     LOD[is.na(LOD)]=0
     LOD=LOD/(2*log(10))
     rownames(LOD)=colnames(cc.incidence)
-    saveRDS(LOD, file=paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignment_LOD.RDS'))
+    dir.create(paste0(base.dir, 'results/cell_cycle_v5/', experiment,'/'))
+    saveRDS(LOD, file=paste0(base.dir, 'results/cell_cycle_v5/', experiment, '/cell_cycle_assignment_LOD.RDS'))
 
-    pdf(file=paste0(base.dir, 'results/cell_cycle/', experiment, '/cell_cycle_assignment_LOD.pdf'), width=10, height=5)
+    pdf(file=paste0(base.dir, 'results/cell_cycle_v5/', experiment, '/cell_cycle_assignment_LOD.pdf'), width=10, height=5)
     for(i in 1:nrow(LOD)){
         plot(LOD[i,],main=rownames(LOD)[i], ylab='LOD', xlab='marker index')
         abline(v=cumsum(c(0,rle(tstrsplit(colnames(Gsub), '_')[[1]])$lengths)), lty=2, col='blue')
