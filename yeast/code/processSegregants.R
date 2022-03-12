@@ -230,6 +230,24 @@ domap_logistic=function(gn,...) {
     return(LRS)
 }
 
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+
        
 chroms=paste0('chr', as.roman(1:16)) 
 #c('I','II', 'III', 'IV', 'V', 'X')
@@ -332,8 +350,29 @@ minInformativeCellsPerTranscript=128
 
 # RUN HMM 
 
-# iterate over each experiment -----------------------------------------------
-for(ee in c(1:6,13:16) ) { #5:length(experiments)){
+# combine experiments
+
+#good YPSxYJM was 11 and 12
+#7,8,
+
+sets=list(
+    '3004'=c(9,10),
+    'A'=c(3,4),
+    'B'=c(1,2,11,12))
+
+#build sets of recurring hets and distorted/unreliable markers  
+for(setn in names(sets)){
+
+    print(setn)
+    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
+    dir.create(comb.out.dir)
+    
+    exp.results=list()
+
+    # iterate over each experiment -----------------------------------------------
+    for( ee in  sets[[setn]] ) { 
+
+    #for(ee in c(1:6,13:16) ) { #5:length(experiments))
     experiment=experiments[ee]
     cross=crossL[[cdesig[ee]]]
     parents=parentsL[[cdesig[ee]]]
@@ -396,6 +435,34 @@ for(ee in c(1:6,13:16) ) { #5:length(experiments)){
     recurring.hets=apply(rQTL.coded[,-het.cells],1,function(x) sum(x==0,na.rm=T)) > (het.across.cells.threshold*sum(!het.cells))
     print(sum(recurring.hets))
     print(sum(recurring.hets)/nrow(rQTL.coded)) 
+
+    tmp=as_matrix(g.counts$ref.counts[,-het.cells])
+    rsum=Rfast::rowsums(tmp)
+    rm(tmp)
+    tmp=as_matrix(g.counts$alt.counts[,-het.cells])
+    asum=Rfast::rowsums(tmp)
+    rm(tmp)
+    #rsum=apply(g.counts$ref.counts[,-het.cells], 1, sum)
+    #asum=apply(g.counts$alt.counts[,-het.cells],1, sum)
+    af=(rsum/(rsum+asum))
+    names(af)=rownames(g.counts$ref)
+    #af[(rsum+asum)<10]=NA
+    af=data.frame(chr=tstrsplit(names(af), '_')[[1]], pos=as.numeric(tstrsplit(names(af), '_')[[2]]), 
+                     rsum=rsum, asum=asum, tcnt=rsum+asum, af=af)
+    af$chr=factor(af$chr, levels=paste0('chr', as.roman(1:16)))
+    af$af.folded=abs(af$af-.5)
+    af$recurring.hets=recurring.hets
+    rownames(af)=names(recurring.hets)
+
+    saveRDS(af, file=paste0(results.dir, 'af.RDS'))
+    rm(rQTL.coded)
+
+    }
+}
+
+
+
+
     #per suggestion of James, run HMM on everything to start
     
     #cross2=buildCross2(rQTL.coded, gmap, 'riself', het.sites.remove=T, het.cells.remove=F,
@@ -410,24 +477,76 @@ for(ee in c(1:6,13:16) ) { #5:length(experiments)){
     #par(yaxs='i')
     #plot(colSums(test[which(classification),]-1)/sum(classification), ylim=c(0,1))
     #abline(h=.85)
-    rm(rQTL.coded)
-    emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
-                                        recurring.het.sites.remove=T,
-                                        recurring.hets=recurring.hets)
-    runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='genoprob') #, n.indiv=1000)
-    runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
+
+#aggregate results 
+af.results=list()
+for(setn in names(sets)){
+
+    print(setn)
+    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
+    dir.create(comb.out.dir)
+    
+
+    # iterate over each experiment -----------------------------------------------
+    for( ee in  sets[[setn]] ) { 
+
+    #for(ee in c(1:6,13:16) ) { #5:length(experiments)){
+    experiment=experiments[ee]
+    cross=crossL[[cdesig[ee]]]
+    parents=parentsL[[cdesig[ee]]]
+    data.dir=data.dirs[ee]
+    results.dir=paste0(base.dir, 'results/', experiment, '/')
+     af.results[[setn]][[experiment]]=readRDS(af, file=paste0(results.dir, 'af.RDS'))
+     af.results[[setn]][[experiment]]$flagged.marker=af.results[[setn]][[experiment]]$af.folded>.4 & af.results[[setn]][[experiment]]$tcnt>10
+    }
 }
 
 
+#assemble bad markers 
+bad.marker.list=lapply(af.results, function(y) { 
+             b=rowSums(sapply(y, function(x) { return(x$recurring.hets | x$flagged.marker) } ) )
+             names(b)=rownames(y[[1]])
+             return(b)
+                     })
+
+#calculate hmm
+for(setn in names(sets)){
+
+    print(setn)
+    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
+    dir.create(comb.out.dir)
+    
+    exp.results=list()
+
+    recurring.hets=bad.marker.list[[setn]]
+    recurring.hets=recurring.hets>0
+
+    # iterate over each experiment -----------------------------------------------
+    for( ee in  sets[[setn]] ) { 
+        print(ee)
+        #for(ee in c(1:6,13:16) ) { #5:length(experiments))
+        experiment=experiments[ee]
+        cross=crossL[[cdesig[ee]]]
+        parents=parentsL[[cdesig[ee]]]
+        data.dir=data.dirs[ee]
+        results.dir=paste0(base.dir, 'results/', experiment, '/')
 
 
+        gmap.s=readRDS(paste0(results.dir, 'gmap.RDS'))
+        
+        g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
+        emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
+                                            recurring.het.sites.remove=T,
+                                            recurring.hets=recurring.hets)
+        print('calculating genotype probabilities')
+        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='genoprob') #, n.indiv=1000)
+        print('calculating viterbi path')
+        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
+}
 
-# combine experiments
-sets=list(
-    '3004'=c(9,10),
-    'A'=c(3,4),
-    #'B'=c(1,2,7,8,
-    'B'=c(11,12))
+}
+
+
 
 for(set in names(sets)){
     print(set)
@@ -450,10 +569,21 @@ for(set in names(sets)){
 
         #read in geno informative counts
         g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
-        
-        rsum=apply(g.counts$ref.counts,1, sum)
-        asum=apply(g.counts$alt.counts,1, sum)
-        af=(rsum/(rsum+asum))
+       
+          tmp=as_matrix(g.counts$ref.counts[,-het.cells])
+          rsum=Rfast::rowsums(tmp)
+          rm(tmp)
+          tmp=as_matrix(g.counts$alt.counts[,-het.cells])
+          asum=Rfast::rowsums(tmp)
+          rm(tmp)
+          #rsum=apply(g.counts$ref.counts[,-het.cells], 1, sum)
+            #asum=apply(g.counts$alt.counts[,-het.cells],1, sum)
+         af=(rsum/(rsum+asum))
+         names(af)=rownames(g.counts$ref)
+
+        #rsum=apply(g.counts$ref.counts,1, sum)
+        #asum=apply(g.counts$alt.counts,1, sum)
+        #af=(rsum/(rsum+asum))
         #af[(rsum+asum)<10]=NA
         af=data.frame(chr=tstrsplit(names(af), '_')[[1]], pos=as.numeric(tstrsplit(names(af), '_')[[2]]), 
                       rsum=rsum, asum=asum, tcnt=rsum+asum, af=af)
@@ -649,7 +779,7 @@ for(set in names(sets)){
     colnames(mmp0)[3]='experiment'
 
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
-
+    cnv=colnames(cc.matrix.manual)
     #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
     for(cn in cnv ){
         print(cn)
