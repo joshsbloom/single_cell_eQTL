@@ -810,7 +810,7 @@ for(set in names(sets)){
 }
 
 # mapping cell cycle classifications 
-for(set in names(sets)[-1]){
+for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
@@ -1014,6 +1014,52 @@ makeBinTable=function(cPf, cbin50k) {
     return(bin.table)
 }
 
+getBinAssignment=function(cPf, cbin50k) {
+    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
+
+    tlink.cnt=findOverlaps(tlinks, unlist(cbin50k))
+      
+    ub=unlist(cbin50k)
+    ub.id=paste0(seqnames(ub), ':', start(ub), '-', start(ub)+width(ub)-1)
+    cPf$bin=ub.id[subjectHits(tlink.cnt)]
+
+  
+    return(cPf)
+}
+
+#not incorporated yet 03/29/22
+fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
+        tcPsig=data.frame(tcP[tcP$FDR<sig,])
+        tcPsig$negbin.beta=NA
+        tcPsig$negbin.se=NA
+        #tcPsig$LLik=NA
+        #tcPsig$negbin.LRS=NA
+        tcPsig$negbin.p=NA
+        #mmp0=mmp1[,-1]
+        for(r in 1:nrow(tcPsig)){
+            print(r)
+            gn=as.character(tcPsig[r,]$transcript)
+            #pcis=as.character(cMsubset$marker[match(gn, cMsubset$transcript)])
+            pmarker=as.character(tcPsig[r,]$peak.marker)
+            theta.est=cisNB[[gn]]$theta
+            #nmLLik=cisNB[[gn]]$LLik
+            XX=cbind(mmp1, Gsub[,pmarker])
+            msize=ncol(XX)
+            fnbrF=fastglm(XX, Yk[,gn],family=negative.binomial(theta=theta.est,link='log'), maxit=500)
+            tcPsig$negbin.beta[r]=as.numeric(coef(fnbrF)[msize])
+            tcPsig$negbin.se[r]=as.numeric(fnbrF$se[msize])
+            tcPsig$negbin.p[r]=pchisq((2*log(10))*tcPsig[r,]$LOD,1, lower.tail=F)
+            #tcPsig$LLik[r]=as.numeric(logLik(fnbrF))
+            #tcPsig$negbin.LRS[r]=as.numeric(-2*(nmLLik-logLik(fnbrF)))
+            #pchisq( tcPsig$negbin.LRS[r],1, lower.tail=F) #-2*(nmodel-plr)
+            print(tcPsig[r,])
+        }
+        return(tcPsig)
+    }
+
+
+
+
 for(set in names(sets)){
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
@@ -1028,6 +1074,7 @@ for(set in names(sets)){
 
 
     cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
+    cmin[!is.na(cmin)]=0
     cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
 
     cbin=data.frame(chr=names(cmin),
@@ -1075,16 +1122,32 @@ for(set in names(sets)){
     cH=plotHotspot2(bin.table,titleme=set)
 
 
- 
+
+    cPf=getBinAssignment(cPf, cbin50k)
+    sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
+
+    sig.hp.names=table(cPf$bin)>sig.hp
+    cPf$in.hotspot=sig.hp.names[cPf$bin]
+
+    plist=list()
+    plist[['combined']]=cPf
+
     hlist=list()
     for(cc in cycle.cats) {
          GP=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
          cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
-         hlist[[cc]]=plotHotspot2(makeBinTable(cPf,cbin50k), titleme=cc)
+         bin.table=makeBinTable(cPf, cbin50k)
+         cPf=getBinAssignment(cPf, cbin50k)
+         sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
+         sig.hp.names=table(cPf$bin)>sig.hp
+         cPf$in.hotspot=sig.hp.names[cPf$bin]
+         hlist[[cc]]=plotHotspot2(bin.table, titleme=cc)
+         plist[[cc]]=cPf
      }
     
     ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
+    saveRDS(plist, file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))
 }
 
 #    plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
