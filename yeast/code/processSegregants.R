@@ -952,7 +952,7 @@ plotHotspot2=function(cPf, titleme='') {
 cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
 sgd.genes$chromosome_name=seqnames(sgd.genes)
 sgd.genes$start_position=start(sgd.genes)
-
+#get global peaks and make some plots 
 for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
@@ -1002,6 +1002,117 @@ for(set in names(sets)){
 }
 
 #}
+
+#epistasis -----------------------------------------------------------------------
+doInt=function(gn, ...) { 
+    print(gn)
+    theta.est=thetas[gn]
+    YY=Yr[,gn]
+    nbn=negative.binomial(theta=theta.est,link='log')
+          
+    GPsdf=GPs[[gn]]
+    #Xmat.0=cbind(mmp2, cc.matrix.manual)
+    peak.combos=expand.grid(GPsdf$peak.marker,GPsdf$peak.marker)
+    peak.combos=peak.combos[peak.combos[,1]!=peak.combos[,2],]
+    peak.combos[,1]=as.character(peak.combos[,1])
+    peak.combos[,2]=as.character(peak.combos[,2])
+
+    LRS2=rep(NA, nrow(peak.combos))
+
+    for(gx in 1:nrow(peak.combos)){
+      print(gx)
+      DM=cbind(mmp2, Gsub[,peak.combos[gx,1]],  Gsub[,peak.combos[gx,2]])
+      fnbrN=fastglmPure(DM, YY, family=nbn)
+      nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
+      DMint=cbind(DM,  Gsub[,peak.combos[gx,1]]* Gsub[,peak.combos[gx,2]])
+      fnbrF=fastglmPure(DMint, YY,  family=nbn)
+      LRS2[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+    }
+    results=(cbind(peak.combos, LRS2))
+    colnames(results)=c('Q1', 'Q2', 'LRS')
+    return(results)
+}
+
+#epistasis -----------------------------------------------------------------------
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+    
+    cc.df=segDataList$cell.cycle.df
+
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp1)[3]='experiment'
+
+   # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+    GP =  readRDS(paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+
+    GPs=split(GP, GP$transcript)
+   # gns=names(GPs)
+   # gn=gns[1]
+    
+    cnv=colnames(cc.matrix.manual)
+    #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
+    for(cn in cnv ){
+        print(cn)
+        Gsub=segDataList$Gsub
+        Yr=segDataList$Yr
+
+        mmp2=mmp1 
+        cells.in.cycle=cc.matrix.manual[,cn]==1
+        mmp2=mmp2[cells.in.cycle,]
+        Gsub=Gsub[cells.in.cycle,]
+        Yr=Yr[cells.in.cycle,]
+
+        print('calculating QTLxQTL LODs')
+        #Yks=Matrix(Yr, sparse=T)
+        clusterExport(cl, varlist=c("thetas", "GPs", "Yr", "Gsub", "mmp2", "nbLL", "doInt"))
+        clusterEvalQ(cl, { Y=Yr;    DM=mmp2;   return(NULL);})
+
+
+        QQ =   parLapply(cl, names(GPs), doInt) 
+        names(QQ)=names(GPs)
+        QQ=data.table::rbindlist(QQ, idcol='transcript')
+        QQ$LOD=QQ$LRS
+        QQ$LOD[is.na(QQ$LOD)]=0
+        QQ$LOD=QQ$LOD/(2*log(10))
+
+        cnn=gsub('/',':', cn)
+        saveRDS(QQ, file=paste0(comb.out.dir, 'LOD_NB_QQ_', cnn,'.RDS'))
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 makeBinTable=function(cPf, cbin50k) {
@@ -1149,6 +1260,16 @@ for(set in names(sets)){
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
     saveRDS(plist, file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))
 }
+
+
+
+
+
+
+
+
+
+
 
 #    plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
 #    ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
