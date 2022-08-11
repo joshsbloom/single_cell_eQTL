@@ -247,6 +247,167 @@ as_matrix <- function(mat){
   return(tmp)
 }
 
+getGlobalPeaks=function( LODr,markerGR,transcript.data, 
+                        chroms=paste0('chr', as.roman(1:16)),
+                        fdrfx.fc=NULL) {
+    cPeaksT=list()
+    for(cc in chroms) {
+        print(cc)
+        moi=grep(paste0('^',cc,'_'), colnames(LODr))
+        rS=LODr[,moi]
+        #mstat=apply(rS,1,max)
+        mstat.pos=Rfast::rowMaxs(abs(rS),value=F) #1,which.max)
+        lookup=cbind(1:length(mstat.pos), mstat.pos)
+        mstat=rS[lookup]
+        LODstat=LODr[,moi][lookup]
+        CIs=matrix(NA,length(mstat),2)
+        cmoi=colnames(LODr[,moi])
+        #this could use a speedup
+        for(peak in 1:length(mstat)){
+            LODrv=LODr[peak,moi]
+            CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
+        }   
+        cPeaksT[[cc]]=data.frame( transcript=rownames(rS),
+                             peak.marker=colnames(rS)[mstat.pos],
+                             CI.l=CIs[,1],
+                             CI.r=CIs[,2],
+                             LOD=LODstat)
+        if(!is.null(fdrfx.fc)){
+           cPeaksT[[cc]]$FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat)
+           cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
+           cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
+        }
+    }
+ 
+    cP=rbindlist(cPeaksT, idcol='chrom')
+    cP$peak.marker=as.character(cP$peak.marker)
+    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
+    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
+    cP$CI.l=as.character(cP$CI.l)
+    cP$CI.r=as.character(cP$CI.r)
+    cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
+    cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
+  
+    cP$tchr=as.character(transcript.data$chromosome_name)[match(cP$transcript, transcript.data$gene_id)]
+    cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$gene_id)]
+    cP=cP[cP$tchr %in% rev(chroms), ]#c("X","V","IV","III","II","I"),]
+    cP$tchr=factor(cP$tchr,levels=rev(chroms)) #c("X","V","IV","III","II","I"))
+    cP$chr=factor(cP$chr,levels=chroms)        #rev(c("X","V","IV","III","II","I")))
+    return(cP)
+}
+
+plotEQTL=function(cPf, titleme='',CI=T) {
+  a=ggplot(cPf,aes(x=pos,y=tpos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_point()+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(tchr~chr,scales="free", space='free')+
+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+    if(CI) {
+        a=a+geom_segment(aes(x = CI.l, y = tpos, xend = CI.r, yend = tpos)) 
+    }
+    return(a)
+}
+
+plotHotspot=function(cPf, titleme='') {
+      h=ggplot(cPf,aes(x=pos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_histogram(binwidth=50000)+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+
+    hd=ggplot_build(h)$data[[1]]
+    sig.hp=qpois(1-(.05/length(hd$y)),ceiling(mean(hd$count)))+1 
+    h+geom_hline(yintercept=sig.hp)
+}
+
+plotHotspot2=function(cPf, titleme='') {
+      h=ggplot(cPf,aes(pos,count)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
+        geom_bar(stat="identity", width=50000)+
+        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
+        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_classic()+
+        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
+        theme(panel.spacing=unit(0, "lines"))+
+        ggtitle(titleme)
+
+       sig.hp=qpois(1-(.05/length(cPf$pos)),ceiling(mean(cPf$count)))+1 
+    h+geom_hline(yintercept=sig.hp)
+}
+
+# given a statistic that increases as a function significance 
+# and the same statistic calculated from permutations
+# and a table that maps transcripts to the closest marker for each transcript
+# calculate functions that map the statistic to FDR
+getFDRfx=function(LODr,LODperm, cisMarkers=NULL){
+
+    max.obsLOD=rowMaxs(LODr, value=T) #apply(abs(rff),1,max)
+    
+    vint=seq(0,max(max.obsLOD)+.01, .01)
+    
+    ll1=apply(LODperm,3,function(x) rowMaxs(x, value=T))
+
+    # global FDR  ---------------------------------------------------------------
+    obsPcnt = sapply(vint, function(thresh) { sum(max.obsLOD>thresh) }   )
+    names(obsPcnt) = vint
+
+    expPcnt = sapply(vint,  
+                 function(thresh) { 
+                     return(mean(apply(ll1,2,function(x) sum(x>thresh))))
+                 })
+    names(expPcnt) = vint 
+    pFDR = expPcnt/obsPcnt
+    
+    pFDR[is.na(pFDR)]=0
+    pFDR[!is.finite(pFDR)]=0
+    #to make sure this is monotonic
+    
+    pFDR = rev(cummax(rev(pFDR)))
+    g.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
+    g.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
+
+    if(!is.null(cisMarkers)) {
+        # local FDR --------------------------------------------------------------------
+        #ll2=lapply(ll, function(x) x$cmax)
+        cMsubset=cisMarkers[which(cisMarkers$transcript %in% rownames(LODr)),]
+        max.obsLODc=LODr[cbind(cMsubset$transcript, cMsubset$marker)]
+        ll2=apply(LODperm,3, function(x) x[cbind(cMsubset$transcript, cMsubset$marker)])
+
+        obsPcnt = sapply(vint, function(thresh) { sum(max.obsLODc>thresh) }   )
+        names(obsPcnt) = vint
+        
+        expPcnt = sapply(vint,  
+                     function(thresh) { 
+                         return(mean(apply(ll2,2,function(x) sum(x>thresh))))
+                     })
+
+        names(expPcnt) = vint 
+        pFDR = expPcnt/obsPcnt
+        
+        pFDR[is.na(pFDR)]=0
+        pFDR[!is.finite(pFDR)]=0
+        #to make sure this is monotonic
+        
+        pFDR = rev(cummax(rev(pFDR)))
+        c.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
+        c.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
+        #---------------------------------------------------------------------------------
+
+        return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx,
+                    c.fdrFX=c.fdrFX, c.rtoFDRfx=c.rtoFDRfx))
+    }
+
+    return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx))
+}
+
+
+
 
        
 chroms=paste0('chr', as.roman(1:16)) 
@@ -259,6 +420,8 @@ sgd.granges=import.gff(paste0(reference.dir, 'saccharomyces_cerevisiae.gff'))
 sgd=as.data.frame(sgd.granges)
 gcoord.key= build.gcoord.key(paste0(reference.dir, 'sacCer3.fasta'))
 sgd.genes=getSGD_GeneIntervals(reference.dir)
+sgd.genes$chromosome_name=seqnames(sgd.genes)
+sgd.genes$start_position=start(sgd.genes)
 
 # for now load all crosses--------------------------------------------------
 load(paste0(reference.dir, 'cross.list.RData'))
@@ -286,6 +449,11 @@ genetic.maps=lapply(crossL, extractGeneticMapDf)
 base.dir='/data/single_cell_eQTL/yeast/'
 cranger.dir='filtered_feature_bc_matrix/'
 
+#GT.YJM145x : num [1:69385] 0 1 0 1 1 0 0 1 1 2 ...
+#  .. ..$ GT.YPS163a
+
+#.$ GT.CBS2888a : num [1:78041] 0 1 1 2 0 0 0 0 0 0 ...
+#  .. ..$ GT.YJM981x  : num [1:78041] 1 0 0 0 1 1 1 1 1 1 ...
 
 cList=list(
            '01_2444_44_1-2'='B',
@@ -496,7 +664,7 @@ for(setn in names(sets)){
     parents=parentsL[[cdesig[ee]]]
     data.dir=data.dirs[ee]
     results.dir=paste0(base.dir, 'results/', experiment, '/')
-     af.results[[setn]][[experiment]]=readRDS(af, file=paste0(results.dir, 'af.RDS'))
+     af.results[[setn]][[experiment]]=readRDS(file=paste0(results.dir, 'af.RDS'))
      af.results[[setn]][[experiment]]$flagged.marker=af.results[[setn]][[experiment]]$af.folded>.4 & af.results[[setn]][[experiment]]$tcnt>10
     }
 }
@@ -569,7 +737,9 @@ for(set in names(sets)){
 
         #read in geno informative counts
         g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
-       
+        classification=readRDS(paste0(results.dir, 'cellFilter.RDS'))
+        het.cells=!classification
+
           tmp=as_matrix(g.counts$ref.counts[,-het.cells])
           rsum=Rfast::rowsums(tmp)
           rm(tmp)
@@ -598,7 +768,7 @@ for(set in names(sets)){
             theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
             theme(panel.spacing=unit(0, "lines"))+
             ggtitle(experiment)
-            ggsave(paste0(results.dir, 'seg_af.png'), width=22, height=5)
+        ggsave(paste0(results.dir, 'seg_af.png'), width=22, height=5)
         
         # read in genetic map and format for plotting
         # gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
@@ -783,6 +953,8 @@ for(set in names(sets)){
     #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
     for(cn in cnv ){
         print(cn)
+        cnn=gsub('/',':', cn)
+       
         Gsub=segDataList$Gsub[cc.df$cell_name,]
         Yr=segDataList$Yr[cc.df$cell_name,]
 
@@ -800,14 +972,48 @@ for(set in names(sets)){
         LOD[is.na(LOD)]=0
         LOD=LOD/(2*log(10))
         rownames(LOD)=names(thetas)[!is.na(thetas)]
-        cnn=gsub('/',':', cn)
+     
         saveRDS(LOD, file=paste0(comb.out.dir, 'LOD_NB_', cnn,'.RDS'))
-        msig=which(LOD>4, arr.ind=T)
-        png(file=paste0(comb.out.dir, 'seg_diagnostic_plot_', cnn, '.png'), width=768,height=768)
-        plot(msig[,2], msig[,1])
-        dev.off()
+  
+        print('calculating permutation LODs')
+        #permute within batch
+        set.seed(100)
+        LODpL=list()
+        for(i in 1:5) { 
+            print(i)
+            new.index=as.vector(do.call('c', sapply(split(seq_along(mmp1[,'experiment']), as.character(mmp1[,'experiment'])), sample)))
+            Ykp=Matrix(Yr[new.index,], sparse=T)
+            mmp2=mmp1
+            mmp2[,2]=mmp1[new.index,2]
+            clusterExport(cl, varlist=c('mmp2', 'Ykp'))
+            clusterEvalQ(cl,{ Y=Ykp; DM=mmp2; return(NULL);})
+            
+            LODp=do.call('rbind', parLapply(cl, names(thetas)[!is.na(thetas)], domap) )
+            LODp[is.na(LODp)]=0
+            LODp=LODp/(2*log(10))
+            rownames(LODp)=names(thetas)[!is.na(thetas)]
+            LODpL[[as.character(i)]]=LODp
+       }
+       LODp=abind(LODpL, along=3)
+       rm(LODpL)
+
+       saveRDS(LODp, file=paste0(comb.out.dir, 'LODperm_NB_', cnn,'.RDS')) 
+      
+       twgFDR= getFDRfx(LOD,LODp, cisMarkers) 
+       saveRDS(twgFDR, file=paste0(comb.out.dir, 'fdrfx_NB_', cnn,'.RDS')) #paste0(dout, 'FDRfx.RDS'))
+
+       #markerGR=getMarkerGRanges(list(t(Gsub)))
+       #GP=getGlobalPeaks(LOD,markerGR,sgd.genes,fdrfx.fc=twgFDR)
+               
+       msig=which(LOD>4, arr.ind=T)
+       png(file=paste0(comb.out.dir, 'seg_diagnostic_plot_', cnn, '.png'), width=768,height=768)
+       plot(msig[,2], msig[,1])
+       dev.off()
     }
 }
+
+
+
 
 # mapping cell cycle classifications 
 for(set in names(sets)){
@@ -852,106 +1058,10 @@ for(set in names(sets)){
     dev.off()
 }
 
-getGlobalPeaks=function( LODr,markerGR,transcript.data, 
-                        chroms=paste0('chr', as.roman(1:16)),
-                        fdrfx.fc=NULL) {
-    cPeaksT=list()
-    for(cc in chroms) {
-        print(cc)
-        moi=grep(paste0('^',cc,'_'), colnames(LODr))
-        rS=LODr[,moi]
-        #mstat=apply(rS,1,max)
-        mstat.pos=Rfast::rowMaxs(abs(rS),value=F) #1,which.max)
-        lookup=cbind(1:length(mstat.pos), mstat.pos)
-        mstat=rS[lookup]
-        LODstat=LODr[,moi][lookup]
-        CIs=matrix(NA,length(mstat),2)
-        cmoi=colnames(LODr[,moi])
-        #this could use a speedup
-        for(peak in 1:length(mstat)){
-            LODrv=LODr[peak,moi]
-            CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
-        }   
-        cPeaksT[[cc]]=data.frame( transcript=rownames(rS),
-                             peak.marker=colnames(rS)[mstat.pos],
-                             CI.l=CIs[,1],
-                             CI.r=CIs[,2],
-                             LOD=LODstat)
-        if(!is.null(fdrfx.fc)){
-           cPeaks[[cc]]$FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat)
-           cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
-           cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
-        }
-    }
- 
-    cP=rbindlist(cPeaksT, idcol='chrom')
-    cP$peak.marker=as.character(cP$peak.marker)
-    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
-    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
-    cP$CI.l=as.character(cP$CI.l)
-    cP$CI.r=as.character(cP$CI.r)
-    cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
-    cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
-  
-    cP$tchr=as.character(transcript.data$chromosome_name)[match(cP$transcript, transcript.data$gene_id)]
-    cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$gene_id)]
-    cP=cP[cP$tchr %in% rev(chroms), ]#c("X","V","IV","III","II","I"),]
-    cP$tchr=factor(cP$tchr,levels=rev(chroms)) #c("X","V","IV","III","II","I"))
-    cP$chr=factor(cP$chr,levels=chroms)        #rev(c("X","V","IV","III","II","I")))
-    return(cP)
-}
-
-
-plotEQTL=function(cPf, titleme='',CI=T) {
-  a=ggplot(cPf,aes(x=pos,y=tpos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_point()+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(tchr~chr,scales="free", space='free')+
-        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-    if(CI) {
-        a=a+geom_segment(aes(x = CI.l, y = tpos, xend = CI.r, yend = tpos)) 
-    }
-    return(a)
-}
-
-plotHotspot=function(cPf, titleme='') {
-      h=ggplot(cPf,aes(x=pos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_histogram(binwidth=50000)+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-
-    hd=ggplot_build(h)$data[[1]]
-    sig.hp=qpois(1-(.05/length(hd$y)),ceiling(mean(hd$count)))+1 
-    h+geom_hline(yintercept=sig.hp)
-}
-
-plotHotspot2=function(cPf, titleme='') {
-      h=ggplot(cPf,aes(pos,count)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_bar(stat="identity", width=50000)+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-
-       sig.hp=qpois(1-(.05/length(cPf$pos)),ceiling(mean(cPf$count)))+1 
-    h+geom_hline(yintercept=sig.hp)
-}
 
 
 
 cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
-sgd.genes$chromosome_name=seqnames(sgd.genes)
-sgd.genes$start_position=start(sgd.genes)
 #get global peaks and make some plots 
 for(set in names(sets)){
     print(set)
@@ -1097,13 +1207,63 @@ for(set in names(sets)){
 }
 
 
+#process epistasis
+
+iLODs=list()
+
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+ 
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+
+    cnv=colnames(cc.matrix.manual)
+    #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
+    QQs=list()
+    for(cn in cnv ){
+        print(cn)
+        cnn=gsub('/',':', cn)
+        QQtemp=readRDS(file=paste0(comb.out.dir, 'LOD_NB_QQ_', cnn,'.RDS'))
+        Q1ind=match(QQtemp$Q1, markerGR$name)
+        Q2ind=match(QQtemp$Q2, markerGR$name)
+
+        Q1f=ifelse(Q1ind<Q2ind, Q1ind,  Q2ind)
+        Q2f=ifelse(Q2ind>Q1ind, Q2ind,  Q1ind)
+        QQtemp$Q1= markerGR$name[Q1f]
+        QQtemp$Q2= markerGR$name[Q2f]
+        ddQ=paste0(QQtemp$transcript, QQtemp$Q1, QQtemp$Q2)
+        QQs[[cnn]]=QQtemp[!duplicated(ddQ),]
+    }
+    iLODs[[set]]=QQs
+}
+
+
+lapply(iLODs, function(x) lapply(x, function(y) y[y$LOD>6,]))
 
 
 
+jLOD=lapply(iLODs, function(QQs) {
 
+    jLOD=rowSums(sapply(QQs, function(x) x$LOD))
+    jLOD=data.frame(QQs[[1]][,c(1:3)], LOD=jLOD)
+    return(jLOD)
+                             } )
 
-
-
+    
 
 
 
@@ -1218,7 +1378,7 @@ for(set in names(sets)){
         #theme(panel.spacing=unit(0, "lines"))+
         geom_hline(aes(yintercept=4, colour='red'))+theme(legend.position='none')+
         ggtitle(set)
-
+   plot(ccLOD) 
    ggsave(file=paste0(comb.out.dir,'/cell_cycle_assignment_LOD.png'), width=10, height=8)
     
 
