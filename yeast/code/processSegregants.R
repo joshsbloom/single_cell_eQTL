@@ -341,6 +341,29 @@ plotHotspot2=function(cPf, titleme='') {
     h+geom_hline(yintercept=sig.hp)
 }
 
+makeBinTable=function(cPf, cbin50k) {
+    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
+
+    tlink.cnt=countOverlaps(unlist(cbin50k), tlinks)
+    bin.table=data.frame(chr=seqnames(unlist(cbin50k)),
+                         pos=round(start(unlist(cbin50k))+25000),
+                         count=tlink.cnt)
+    return(bin.table)
+}
+
+getBinAssignment=function(cPf, cbin50k) {
+    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
+
+    tlink.cnt=findOverlaps(tlinks, unlist(cbin50k))
+      
+    ub=unlist(cbin50k)
+    ub.id=paste0(seqnames(ub), ':', start(ub), '-', start(ub)+width(ub)-1)
+    cPf$bin=ub.id[subjectHits(tlink.cnt)]
+
+  
+    return(cPf)
+}
+
 # given a statistic that increases as a function significance 
 # and the same statistic calculated from permutations
 # and a table that maps transcripts to the closest marker for each transcript
@@ -676,6 +699,7 @@ bad.marker.list=lapply(af.results, function(y) {
              names(b)=rownames(y[[1]])
              return(b)
                      })
+#saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
 
 #calculate hmm
 for(setn in names(sets)){
@@ -703,6 +727,15 @@ for(setn in names(sets)){
         gmap.s=readRDS(paste0(results.dir, 'gmap.RDS'))
         
         g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
+        tmp=as_matrix(g.counts$ref.counts[,-recurring.hets])
+        #rsum=Rfast::colsums(tmp)
+        #rm(tmp)
+        tmp1=as_matrix(g.counts$alt.counts[,-recurring.hets])
+        asum=Rfast::rowsums(tmp)
+        #rm(tmp1)
+        tmp2=tmp+tmp1
+        print(colsums(tmp2>0))
+        #note recurring.hets contains all flagged markers for removal
         emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
                                             recurring.het.sites.remove=T,
                                             recurring.hets=recurring.hets)
@@ -1015,6 +1048,85 @@ for(set in names(sets)){
 
 
 
+
+cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
+#get global peaks and make some plots 
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+    Yr=segDataList$Yr
+    Gsub=segDataList$Gsub
+    cisMarkers=segDataList$cisMarkers 
+    transcript.features=segDataList$transcript.features
+    barcode.features=segDataList$barcode.features
+    dispersion.df=segDataList$dispersion.df
+
+    thetas=dispersion.df$theta.cis
+    names(thetas)=dispersion.df$gene
+    
+    cc.df=segDataList$cell.cycle.df
+  
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    colnames(mmp1)[3]='experiment'
+
+   # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+   
+    L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cycle.cats[1],'.RDS'))
+    addL=L
+    addL[is.numeric(addL)]=0
+
+    #twgFDR= getFDRfx(LOD,LODp, cisMarkers) 
+    #saveRDS(twgFDR, file=paste0(comb.out.dir, 'fdrfx_NB_', cnn,'.RDS')) #paste0(dout, 'FDRfx.RDS'))
+    #GP=getGlobalPeaks(LOD,markerGR,sgd.genes,fdrfx.fc=twgFDR)
+    
+    
+    #fix this 
+    addLp=abind(addL, addL, addL, addL, addL, along=3)
+
+    for(cc in cycle.cats) {
+        print(cc)
+        L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cc,'.RDS'))
+        twgFDR=readRDS(file=paste0(comb.out.dir, 'fdrfx_NB_cell_cycle', cc,'.RDS'))
+        GP=getGlobalPeaks(L,markerGR,sgd.genes,fdrfx.fc=twgFDR)
+
+        saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
+        plotEQTL(GP[GP$FDR<.05,], titleme=cc)
+        ggsave(file=paste0(comb.out.dir,'/LOD_NB_', cc, '.png'), width=10, height=10)
+      
+        Lp=readRDS(paste0(comb.out.dir, 'LODperm_NB_cell_cycle', cc,'.RDS')) 
+
+        addL=addL+L
+        addLp=addLp+Lp
+    }
+   twgFDRG= getFDRfx(addL,addLp, cisMarkers) 
+   saveRDS(twgFDRG, file=paste0(comb.out.dir, 'fdrfx_NB_combined.RDS'))
+   
+   GP=getGlobalPeaks(addL,markerGR,sgd.genes,fdrfx.fc=twgFDRG)
+ 
+   saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+   plotEQTL(GP[GP$FDR<.05,], titleme='combined', CI=F)
+   ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+   print(nrow(GP[GP$FDR<.1,]))
+   print(nrow(GP[GP$FDR<.05,]))
+}
+
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+
+    GP=readRDS(paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+    print(nrow(GP[GP$chrom==GP$tchr & GP$FDR<.05,]))
+    print(nrow(GP[GP$chrom!=GP$tchr & GP$FDR<.05,]))
+
+}
 # mapping cell cycle classifications 
 for(set in names(sets)){
     print(set)
@@ -1058,58 +1170,6 @@ for(set in names(sets)){
     dev.off()
 }
 
-
-
-
-cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
-#get global peaks and make some plots 
-for(set in names(sets)){
-    print(set)
-    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
-    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
-
-    Yr=segDataList$Yr
-    Gsub=segDataList$Gsub
-    cisMarkers=segDataList$cisMarkers 
-    transcript.features=segDataList$transcript.features
-    barcode.features=segDataList$barcode.features
-    dispersion.df=segDataList$dispersion.df
-
-    thetas=dispersion.df$theta.cis
-    names(thetas)=dispersion.df$gene
-    
-    cc.df=segDataList$cell.cycle.df
-
-    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
-    colnames(mmp1)[3]='experiment'
-
-   # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
-    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
-    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
-    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
-    markerGR=getMarkerGRanges(list(t(Gsub)))
-   
-    L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cycle.cats[1],'.RDS'))
-    addL=L
-    addL[is.numeric(addL)]=0
-
-    for(cc in cycle.cats) {
-        L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cc,'.RDS'))
-        GP=getGlobalPeaks(L,markerGR,sgd.genes)
-        saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
-        plotEQTL(GP[GP$LOD>4,], titleme=cc)
-    
-        ggsave(file=paste0(comb.out.dir,'/LOD_NB_', cc, '.png'), width=10, height=10)
-
-        addL=addL+L
-    }
-
-        GP=getGlobalPeaks(addL,markerGR,sgd.genes)
-        saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
-        plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
-        ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
-
-}
 
 #}
 
@@ -1275,29 +1335,6 @@ jLOD=lapply(iLODs, function(QQs) {
 
 
 
-makeBinTable=function(cPf, cbin50k) {
-    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
-
-    tlink.cnt=countOverlaps(unlist(cbin50k), tlinks)
-    bin.table=data.frame(chr=seqnames(unlist(cbin50k)),
-                         pos=round(start(unlist(cbin50k))+25000),
-                         count=tlink.cnt)
-    return(bin.table)
-}
-
-getBinAssignment=function(cPf, cbin50k) {
-    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
-
-    tlink.cnt=findOverlaps(tlinks, unlist(cbin50k))
-      
-    ub=unlist(cbin50k)
-    ub.id=paste0(seqnames(ub), ':', start(ub), '-', start(ub)+width(ub)-1)
-    cPf$bin=ub.id[subjectHits(tlink.cnt)]
-
-  
-    return(cPf)
-}
-
 #not incorporated yet 03/29/22
 fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
         tcPsig=data.frame(tcP[tcP$FDR<sig,])
@@ -1330,35 +1367,10 @@ fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
 
 
 
-
+   #read cell cycle LODs
+   
 for(set in names(sets)){
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
-    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
-
-   
-    Gsub=segDataList$Gsub
-
-    markerGR=getMarkerGRanges(list(t(Gsub)))
-
-
-
-
-
-    cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
-    cmin[!is.na(cmin)]=0
-    cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
-
-    cbin=data.frame(chr=names(cmin),
-                    start=cmin,
-                    end=cmax, 
-                    strand="*")
-    cbin=makeGRangesFromDataFrame(cbin)
-    ###########################################################################################################3
-    # analyze within each sub experiment 
-    cbin50k=GenomicRanges::tile(cbin, width=50000)
-
-
-    #read cell cycle LODs
 
     ccLOD=readRDS(file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
     ccLOD=ccLOD[1:5,]
@@ -1381,24 +1393,48 @@ for(set in names(sets)){
    plot(ccLOD) 
    ggsave(file=paste0(comb.out.dir,'/cell_cycle_assignment_LOD.png'), width=10, height=8)
     
+}
 
 
-    GP=readRDS(file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+hotspotList=list()
+for(set in names(sets)){
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+
+   
+    Gsub=segDataList$Gsub
+
+    markerGR=getMarkerGRanges(list(t(Gsub)))
+
+
+    cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
+    cmin[!is.na(cmin)]=0
+    cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
+
+    cbin=data.frame(chr=names(cmin),
+                    start=cmin,
+                    end=cmax, 
+                    strand="*")
+    cbin=makeGRangesFromDataFrame(cbin)
+    ###########################################################################################################3
+    # analyze within each sub experiment 
+    cbin50k=GenomicRanges::tile(cbin, width=50000)
+
+
+   GP=readRDS(file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
   
     # plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
-    cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+   # cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+   cPf=GP[GP$FDR<.05 & GP$chr!=GP$tchr,]
     
-    bin.table=makeBinTable(cPf, cbin50k)
+   bin.table=makeBinTable(cPf, cbin50k)
+   cH=plotHotspot2(bin.table,titleme=set)
 
-    cH=plotHotspot2(bin.table,titleme=set)
+   cPf=getBinAssignment(cPf, cbin50k)
+   sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
 
-
-
-    cPf=getBinAssignment(cPf, cbin50k)
-    sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
-
-    sig.hp.names=table(cPf$bin)>sig.hp
-    cPf$in.hotspot=sig.hp.names[cPf$bin]
+   sig.hp.names=table(cPf$bin)>sig.hp
+   cPf$in.hotspot=sig.hp.names[cPf$bin]
 
     plist=list()
     plist[['combined']]=cPf
@@ -1406,7 +1442,9 @@ for(set in names(sets)){
     hlist=list()
     for(cc in cycle.cats) {
          GP=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
-         cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+         #    cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
+         cPf=GP[GP$FDR<.05 & GP$chr!=GP$tchr,]
+
          bin.table=makeBinTable(cPf, cbin50k)
          cPf=getBinAssignment(cPf, cbin50k)
          sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
@@ -1419,7 +1457,24 @@ for(set in names(sets)){
     ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
     saveRDS(plist, file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))
+    hotspotList[[set]]=plist
 }
+
+
+
+
+lapply(hotspotList, function(x) { unique(x$combined$bin[x$combined$in.hotspot]) })
+
+
+
+
+
+
+
+
+
+
+
 
 
 
