@@ -113,7 +113,7 @@ nbLL=function (y, mu, theta)  {
     return( -sum ( (y + theta) * log(mu + theta) - y * log(mu) + lgamma(y + 1) - theta * log(theta) + lgamma(theta) - lgamma(theta + y) ))
 }
 # fast calculation of negative binomial LL across the genome if theta is known 
-domap=function(gn, ...) { 
+domap=function(gn, ss=F,...) { 
        print(gn)
        theta.est=thetas[gn]
        YY=Y[,gn]
@@ -125,6 +125,10 @@ domap=function(gn, ...) {
        LRS=rep(NA,ncol(Gsub))
        names(LRS)=colnames(Gsub)
 
+       if(ss){
+            Betas=LRS
+            SEs=LRS
+       }
        #initialize the last column of DM to be 1s
        XXn=cbind(DM,1)
        idx=1:ncol(Gsub)
@@ -134,8 +138,17 @@ domap=function(gn, ...) {
            XXn[,gcovn]=Gsub[,gx]
            fnbrF=fastglmPure(XXn, YY,  family=nbn)
            LRS[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
+           if(ss){
+            Betas[gx]=as.numeric(fnbrF$coefficients[gcovn])
+            SEs[gx]=fnbrF$se[gcovn]
+           }
         }
+       if(ss) {
+        return(list(LRS=LRS,Betas=Betas,SEs=SEs))
+       } else{
+
        return(LRS)
+       }
 }
 
 
@@ -1001,13 +1014,23 @@ for(set in names(sets)){
         #Yks=Matrix(Yr, sparse=T)
         clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
         clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
-        LOD=do.call('rbind', parLapply(cl, names(thetas)[!is.na(thetas)], domap) )
+
+        bunchoflists=parLapply(cl, names(thetas)[!is.na(thetas)], domap, ss=T)
+        LOD=do.call('rbind', lapply(bunchoflists,function(x)x$LRS))
+        #LOD=do.call('rbind', parLapply(cl, names(thetas)[!is.na(thetas)], domap) )
         LOD[is.na(LOD)]=0
         LOD=LOD/(2*log(10))
         rownames(LOD)=names(thetas)[!is.na(thetas)]
-     
+
         saveRDS(LOD, file=paste0(comb.out.dir, 'LOD_NB_', cnn,'.RDS'))
-  
+
+        Betas=do.call('rbind', lapply(bunchoflists,function(x)x$Betas))
+        saveRDS(Betas, file=paste0(comb.out.dir, 'Betas_NB_', cnn,'.RDS'))
+     
+        SEs=do.call('rbind', lapply(bunchoflists,function(x)x$SEs))
+        saveRDS(SEs, file=paste0(comb.out.dir, 'SEs_NB_', cnn,'.RDS'))
+
+
         print('calculating permutation LODs')
         #permute within batch
         set.seed(100)
