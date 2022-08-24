@@ -262,7 +262,7 @@ as_matrix <- function(mat){
 
 getGlobalPeaks=function( LODr,markerGR,transcript.data, 
                         chroms=paste0('chr', as.roman(1:16)),
-                        fdrfx.fc=NULL) {
+                        fdrfx.fc=NULL,Betas=NULL,SEs=NULL) {
     cPeaksT=list()
     for(cc in chroms) {
         print(cc)
@@ -276,6 +276,7 @@ getGlobalPeaks=function( LODr,markerGR,transcript.data,
         CIs=matrix(NA,length(mstat),2)
         cmoi=colnames(LODr[,moi])
         #this could use a speedup
+
         for(peak in 1:length(mstat)){
             LODrv=LODr[peak,moi]
             CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
@@ -285,13 +286,38 @@ getGlobalPeaks=function( LODr,markerGR,transcript.data,
                              CI.l=CIs[,1],
                              CI.r=CIs[,2],
                              LOD=LODstat)
+       
+        if(!is.null(Betas)){
+            if(is.list(Betas)){
+                 for(n in names(Betas)){
+                    cPeaksT[[cc]][[paste0('Beta_',n)]]= Betas[[n]][,moi][lookup]
+                 }
+            }  else {
+                cPeaksT[[cc]]$Beta=Betas[,moi][lookup]
+            }
+        }
+        if(!is.null(SEs)){
+            if(is.list(SEs)){
+                for(n in names(SEs)){
+                    cPeaksT[[cc]][[paste0('SE_',n)]]= SEs[[n]][,moi][lookup]
+                 }
+
+            } else {
+            cPeaksT[[cc]]$SE=SEs[,moi][lookup]
+            }
+        }
+
         if(!is.null(fdrfx.fc)){
            cPeaksT[[cc]]$FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat)
            cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
            cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
         }
     }
- 
+    #inverse variance weights
+    #        w=1/SE^2
+    #        ivw.mean=sum(w*B)/sum(w)
+    #        ivw.se=sqrt(1/sum(w))
+
     cP=rbindlist(cPeaksT, idcol='chrom')
     cP$peak.marker=as.character(cP$peak.marker)
     cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
@@ -312,6 +338,8 @@ getGlobalPeaks=function( LODr,markerGR,transcript.data,
 plotEQTL=function(cPf, titleme='',CI=T) {
   a=ggplot(cPf,aes(x=pos,y=tpos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
         geom_point()+
+        #,color=cPf$Beta/cPf$SE
+        #scale_colour_viridis_c()+
         xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
         facet_grid(tchr~chr,scales="free", space='free')+
         #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
@@ -547,6 +575,7 @@ clusterEvalQ(cl, {
 nUMI_thresh=10000
 minInformativeCellsPerTranscript=128
 
+nperm=5
 
 #note sgd gene def is updated to include 3' utr               
 #sgd.genes=sgd.granges[sgd.granges$type=='gene',]
@@ -1035,7 +1064,7 @@ for(set in names(sets)){
         #permute within batch
         set.seed(100)
         LODpL=list()
-        for(i in 1:5) { 
+        for(i in 1:nperm) { 
             print(i)
             new.index=as.vector(do.call('c', sapply(split(seq_along(mmp1[,'experiment']), as.character(mmp1[,'experiment'])), sample)))
             Ykp=Matrix(Yr[new.index,], sparse=T)
@@ -1067,6 +1096,8 @@ for(set in names(sets)){
        dev.off()
     }
 }
+   
+
 
 
 
@@ -1112,13 +1143,21 @@ for(set in names(sets)){
     
     
     #fix this 
-    addLp=abind(addL, addL, addL, addL, addL, along=3)
+    addLp=replicate(nperm, addL)   #addLp=abind(addL, addL, addL, addL, addL, along=3)
 
+    BetasList=list()
+    SEsList=list()
     for(cc in cycle.cats) {
         print(cc)
         L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cc,'.RDS'))
         twgFDR=readRDS(file=paste0(comb.out.dir, 'fdrfx_NB_cell_cycle', cc,'.RDS'))
-        GP=getGlobalPeaks(L,markerGR,sgd.genes,fdrfx.fc=twgFDR)
+
+        Betas=readRDS(paste0(comb.out.dir, 'Betas_NB_cell_cycle', cc,'.RDS'))
+        SEs=readRDS(paste0(comb.out.dir, 'SEs_NB_cell_cycle', cc,'.RDS'))
+
+        BetasList[[cc]]=Betas
+        SEsList[[cc]]=SEs
+        GP=getGlobalPeaks(L,markerGR,sgd.genes,fdrfx.fc=twgFDR,Betas=Betas,SEs=SEs)
 
         saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
         plotEQTL(GP[GP$FDR<.05,], titleme=cc)
@@ -1129,10 +1168,11 @@ for(set in names(sets)){
         addL=addL+L
         addLp=addLp+Lp
     }
+
    twgFDRG= getFDRfx(addL,addLp, cisMarkers) 
    saveRDS(twgFDRG, file=paste0(comb.out.dir, 'fdrfx_NB_combined.RDS'))
    
-   GP=getGlobalPeaks(addL,markerGR,sgd.genes,fdrfx.fc=twgFDRG)
+   GP=getGlobalPeaks(addL,markerGR,sgd.genes,fdrfx.fc=twgFDRG, Betas=BetasList, SEs=SEsList)
  
    saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
    plotEQTL(GP[GP$FDR<.05,], titleme='combined', CI=F)
@@ -1140,6 +1180,9 @@ for(set in names(sets)){
    print(nrow(GP[GP$FDR<.1,]))
    print(nrow(GP[GP$FDR<.05,]))
 }
+
+
+
 
 for(set in names(sets)){
     print(set)
