@@ -151,7 +151,51 @@ domap=function(gn, ss=F,...) {
        }
 }
 
+#logistic regression mapping (for discrete cycle classification assignments ) 
+domap_logistic=function(gn, ss=F, ...) {
+    YY=cc.incidence[,gn]
+    DM=mmp1
+    fnbrN=fastglmPure(DM, YY, family=binomial())
+    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
 
+    LRS=rep(NA,ncol(Gsub))
+    names(LRS)=colnames(Gsub)
+ 
+    if(ss){
+            Betas=LRS
+            SEs=LRS
+       }
+
+    #initialize the last column of DM to be 1s
+    XXn=cbind(DM,1)
+    idx=1:ncol(Gsub)
+    gcovn=(ncol(XXn))
+    for(gx in idx) { 
+       #colnames(Gsub)){
+        XXn[,gcovn]=Gsub[,gx]
+        fnbrF=fastglmPure(XXn, YY,  family=binomial())
+        #can just use deviances here 
+        LRS[gx]=fnbrN$deviance-fnbrF$deviance
+        if(ss){
+            Betas[gx]=as.numeric(fnbrF$coefficients[gcovn])
+            SEs[gx]=fnbrF$se[gcovn]
+           }
+        }
+       if(ss) {
+        return(list(LRS=LRS,Betas=Betas,SEs=SEs))
+       } else{
+
+       return(LRS)
+       }
+}
+
+
+
+
+
+
+
+           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
 
 #cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
 
@@ -218,30 +262,6 @@ doCisNebula3=function(x,...) { # mmp1,counts,Gsub){
         return(NBcis)
     }
 
-#logistic regression mapping (for discrete cycle classification assignments ) 
-domap_logistic=function(gn,...) {
-    YY=cc.incidence[,gn]
-    DM=mmp1
-    fnbrN=fastglmPure(DM, YY, family=binomial())
-    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
-
-    LRS=rep(NA,ncol(Gsub))
-    names(LRS)=colnames(Gsub)
-
-    #initialize the last column of DM to be 1s
-    XXn=cbind(DM,1)
-    idx=1:ncol(Gsub)
-    gcovn=(ncol(XXn))
-    for(gx in idx) { 
-       #colnames(Gsub)){
-        XXn[,gcovn]=Gsub[,gx]
-        fnbrF=fastglmPure(XXn, YY,  family=binomial())
-        #can just use deviances here 
-        LRS[gx]=fnbrN$deviance-fnbrF$deviance
-           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
-   }
-    return(LRS)
-}
 
 as_matrix <- function(mat){
 
@@ -1039,6 +1059,18 @@ for(set in names(sets)){
         Gsub=Gsub[cells.in.cycle,]
         Yr=Yr[cells.in.cycle,]
 
+        
+        #testing mm stuff ---
+        GRM=tcrossprod(scale(Gsub))/ncol(Gsub)
+        colnames(GRM)=rownames(GRM)=1:nrow(mmp1)
+
+        pheno=data.frame(pheno=Yr[,'YPR028W'], mmp1, id=1:nrow(mmp1)) #rownames(mmp1)) 
+        names(pheno)=c('p', 'int', 'lUMI', 'experiment', 'id')
+        
+        test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=poisson(link='log'),verbose=T)
+        test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=quasipoisson(link='log'), verbose=T)
+        #----------------
+
         print('calculating LODs')
         #Yks=Matrix(Yr, sparse=T)
         clusterExport(cl, varlist=c("thetas", "Yr", "Gsub", "mmp1", "nbLL", "domap"))
@@ -1193,6 +1225,7 @@ for(set in names(sets)){
     print(nrow(GP[GP$chrom!=GP$tchr & GP$FDR<.05,]))
 
 }
+
 # mapping cell cycle classifications 
 for(set in names(sets)){
     print(set)
@@ -1221,12 +1254,23 @@ for(set in names(sets)){
 
     clusterExport(cl, varlist=c("Gsub", "mmp1", "cc.incidence", "domap_logistic"))
     #clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
-    LOD=do.call('rbind', parLapply(cl, colnames(cc.incidence), domap_logistic) )
+    bunchoflists=parLapply(cl, colnames(cc.incidence), domap_logistic, ss=T)
+
+    LOD=do.call('rbind', lapply(bunchoflists, function(x)x$LRS))
     LOD[is.na(LOD)]=0
     LOD=LOD/(2*log(10))
     rownames(LOD)=colnames(cc.incidence)
     #dir.create(paste0(base.dir, 'results/cell_cycle_v5/', experiment,'/'))
     saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
+
+    Betas=do.call('rbind', lapply(bunchoflists,function(x)x$Betas))
+    rownames(Betas)=rownames(LOD) #colnames(cc.incidence)
+
+    saveRDS(Betas, file=paste0(comb.out.dir, 'cell_cycle_assignment_Betas.RDS'))
+     
+    SEs=do.call('rbind', lapply(bunchoflists,function(x)x$SEs))
+    rownames(SEs)=rownames(LOD)
+    saveRDS(SEs, file=paste0(comb.out.dir, 'cell_cycle_assignment_SEs.RDS'))
 
     pdf(file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.pdf'), width=10, height=5)
     for(i in 1:nrow(LOD)){
