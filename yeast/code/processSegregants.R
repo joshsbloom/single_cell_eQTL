@@ -1143,7 +1143,13 @@ for(set in names(sets)){
     segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
 
     Yr=segDataList$Yr
+    print(nrow(Yr))
+    print(ncol(Yr))
     Gsub=segDataList$Gsub
+    print(nrow(Gsub))
+    print(ncol(Gsub))
+
+
     cisMarkers=segDataList$cisMarkers 
     transcript.features=segDataList$transcript.features
     barcode.features=segDataList$barcode.features
@@ -1215,14 +1221,20 @@ for(set in names(sets)){
 
 
 
-
+# summary of QTL detected at different FDR thresholds 
 for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
 
     GP=readRDS(paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
+    print('5% FDR')
     print(nrow(GP[GP$chrom==GP$tchr & GP$FDR<.05,]))
     print(nrow(GP[GP$chrom!=GP$tchr & GP$FDR<.05,]))
+
+    print('10% FDR')
+    print(nrow(GP[GP$chrom==GP$tchr & GP$FDR<.1,]))
+    print(nrow(GP[GP$chrom!=GP$tchr & GP$FDR<.1,]))
+
 
 }
 
@@ -1364,8 +1376,8 @@ for(set in names(sets)){
         clusterEvalQ(cl, { Y=Yr;    DM=mmp2;   return(NULL);})
 
 
-        QQ =   parLapply(cl, names(GPs), doInt) 
-        names(QQ)=names(GPs)
+        QQ =   parLapply(cl, names(GPs)[1:16], doInt) 
+        names(QQ)=names(GPs)[1:16]
         QQ=data.table::rbindlist(QQ, idcol='transcript')
         QQ$LOD=QQ$LRS
         QQ$LOD[is.na(QQ$LOD)]=0
@@ -1373,6 +1385,33 @@ for(set in names(sets)){
 
         cnn=gsub('/',':', cn)
         saveRDS(QQ, file=paste0(comb.out.dir, 'LOD_NB_QQ_', cnn,'.RDS'))
+    
+   #permutations        ------------------------------------------------------------------------------------------------    
+        set.seed(100)
+        LODpL=list()
+        for(i in 1:nperm) { 
+            print(i)
+            new.index=as.vector(do.call('c', sapply(split(seq_along(mmp2[,'experiment']), as.character(mmp2[,'experiment'])), sample)))
+            Ykp=Matrix(Yr[new.index,], sparse=T)
+            mmp3=mmp2
+            mmp3[,2]=mmp2[new.index,2]
+            clusterExport(cl, varlist=c('mmp3', 'Ykp'))
+            clusterEvalQ(cl,{ Yr=Ykp; DM=mmp3; return(NULL);})
+            
+            QQp =   parLapply(cl, names(GPs), doInt) 
+            names(QQp)=names(GPs) 
+            QQp=data.table::rbindlist(QQp, idcol='transcript')
+            QQp$LOD=QQp$LRS
+            QQp$LOD[is.na(QQp$LOD)]=0
+            QQp$LOD=QQp$LOD/(2*log(10))
+            LODpL[[i]]=QQp
+        }
+
+        LODpLn=LODpL[[1]][,-4]
+        for( i in 2:nperm) {  LODpLn=cbind(LODpLn, LODpL[[i]]$LOD) }
+        saveRDS(LODpLn, file=paste0(comb.out.dir, 'LODperm_NB_QQ_', cnn, '.RDS'))
+  #---------------------------------------------------------------------------------------------------------------------
+    
     }
 }
 
@@ -1385,6 +1424,7 @@ for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+    cc.df=segDataList$cell.cycle.df
 
     Yr=segDataList$Yr
     Gsub=segDataList$Gsub
@@ -1434,8 +1474,9 @@ jLOD=lapply(iLODs, function(QQs) {
                              } )
 
     
+lapply(jLOD, function(x) x[x$LOD>6,])
 
-
+hist(pchisq((2*log(10))*jLOD[[3]]$LOD,1, lower.tail=F))
 
 
 
