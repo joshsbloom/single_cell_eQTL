@@ -1,813 +1,11 @@
-library(monocle)
-library(Matrix)
-library(rtracklayer)
-library(data.table)
-library(qtl)
-library(qtl2)
-library(parallel)
-library(Rfast)
-library(seqinr)
-library(GenomicRanges)
-library("BSgenome.Scerevisiae.UCSC.sacCer3")
-library(foreach)
-library(doMC)
-library(glmmTMB)
-library(ggplot2)
-library(mgcv)
-library(Rfast2)
-library(fastglm)
-library(MASS)
-library(irlba)
-library(nebula)
-library(dplyr)
+#define a bunch of useful functions and experiment specific variables
+source('/data/single_cell_eQTL/yeast/code/processSegregantsSetup.R')
 
-# for parallelizing the HMM
-ncores=16
-registerDoMC(cores=ncores)
+#run HMM and organize data per experiment
+source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
-code.dir='/data/single_cell_eQTL/yeast/code/'
-source(paste0(code.dir, 'rqtl.R'))
-source(paste0(code.dir, 'getGenoInformativeCounts.R'))
-source(paste0(code.dir, 'additional_fxs.R'))
-source(paste0(code.dir, 'estimateEmissionProbs.R'))
-source(paste0(code.dir, 'HMM_fxs.R'))
-source(paste0(code.dir, 'runHMM_custom.R'))
 
-source(paste0(code.dir, 'ASE_fxs.R'))
 
-# parallelized standardise function
-standardise2 <- function (x, center = TRUE, scale = TRUE) {
-  if ( center & scale ) {
-    y <- t(x) - Rfast::colmeans(x,parallel=T)
-    y <- y / sqrt( Rfast::rowsums(y^2) ) * sqrt( (dim(x)[1] - 1) )
-	y <- t(y)
-  } else if ( center & !scale ) {
-    m <- Rfast::colmeans(x,parallel=T)
-    y <- eachrow(x, m, oper ="-" )
-  } else if ( !center & scale ) {
-    s <- Rfast::colVars(x, std = TRUE,parallel=T)
-    y <- eachrow(x, s, oper = "/")
-  }
-  colnames(y)=colnames(x)
-  rownames(y)=rownames(x)
-  y
-} 
-
-
-fitNBCisModel=function(cMsubset, mmp1, Yk, Gsub, resids=NULL) {
-    mmp0=mmp1[,-1]
-
-    #nbR=Yk
-    #nbR[is.numeric(nbR)]=NA
-    ##nbP=nbR
-
-
-    cisNB=list() 
-    for(r in 1:nrow(cMsubset)){
-        print(r)
-        gn=as.character(cMsubset$transcript[r])
-        p=as.character(cMsubset$marker[r])
-        cmodel=cbind(mmp0, Gsub[,p])
-        nbr=negbin.reg(Yk[,gn], cmodel,maxiters=500)
-        if(!is.na(nbr$info[4]) & (nbr$info[4]<100 & !is.na(nbr$info[3])) ){
-             theta.est=nbr$info[4]
-             coef.est=nbr$be[,1]
-        } else {
-            nbr=mgcv::gam(Yk[,gn]~cmodel, family=mgcv::nb , method="ML")
-            theta.est=nbr$family$getTheta(T)
-            coef.est=as.vector(coef(nbr))
-        }
-        XX=cbind(mmp1, Gsub[,p])
-        msize=ncol(XX)
-        fnbrF=fastglm(XX, Yk[,gn], start=coef.est, family=negative.binomial(theta=theta.est,link='log'), maxit=500)
-        ##pseudo r^2 statistics 
-        ##library(performance)
-        ##class(fnbrF)='glm'
-        ##r2(fnbrF)
-        fnbrN=fastglm(mmp1,Yk[,gn], start=coef.est[-msize],  family=negative.binomial(theta=theta.est,link='log'), maxit=500)
-        #if(resids=='deviance'){       nbR[,gn]=residuals(fnbrF,'deviance') }
-        #if(resids=='pearson') {       nbR[,gn]=residuals(fnbrF,'pearson') }
-        cisNB[[gn]]$transcript=gn
-        cisNB[[gn]]$lmarker=p
-        cisNB[[gn]]$theta=theta.est
-        cisNB[[gn]]$negbin.beta=as.numeric(coef(fnbrF)[msize])
-        cisNB[[gn]]$negbin.se=as.numeric(fnbrF$se[msize])
-        cisNB[[gn]]$LLik=as.numeric(logLik(fnbrF))
-        cisNB[[gn]]$negbin.LRS=as.numeric(-2*(logLik(fnbrN)-logLik(fnbrF)))
-        cisNB[[gn]]$negbin.p=pchisq( cisNB[[gn]]$negbin.LRS,1, lower.tail=F) 
-         #-2*(nmodel-plr)
-        cisNB[[gn]]$fmodelBs=coef(fnbrF)
-        
-        if(resids=='pearson') {       cisNB[[gn]]$pearsonResiduals=residuals(fnbrF,'pearson') }
-        
-        #print(cisNB[[gn]])
-    }
-
-   # nbR.var=colVars(nbR)
-   # nbR=nbR[,-which(is.na(nbR.var))]
-    return(cisNB) #, nbR=nbR))
-}
-
-# formula for calculating the negative binomial glm log likelihood 
-nbLL=function (y, mu, theta)  {
-    return( -sum ( (y + theta) * log(mu + theta) - y * log(mu) + lgamma(y + 1) - theta * log(theta) + lgamma(theta) - lgamma(theta + y) ))
-}
-# fast calculation of negative binomial LL across the genome if theta is known 
-domap=function(gn, ss=F,...) { 
-       print(gn)
-       theta.est=thetas[gn]
-       YY=Y[,gn]
-       nbn=negative.binomial(theta=theta.est,link='log')
-      
-       fnbrN=fastglmPure(DM, YY, family=nbn)
-       nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
-
-       LRS=rep(NA,ncol(Gsub))
-       names(LRS)=colnames(Gsub)
-
-       if(ss){
-            Betas=LRS
-            SEs=LRS
-       }
-       #initialize the last column of DM to be 1s
-       XXn=cbind(DM,1)
-       idx=1:ncol(Gsub)
-       gcovn=(ncol(XXn))
-       for(gx in idx) { 
-           #colnames(Gsub)){
-           XXn[,gcovn]=Gsub[,gx]
-           fnbrF=fastglmPure(XXn, YY,  family=nbn)
-           LRS[gx]=-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
-           if(ss){
-            Betas[gx]=as.numeric(fnbrF$coefficients[gcovn])
-            SEs[gx]=fnbrF$se[gcovn]
-           }
-        }
-       if(ss) {
-        return(list(LRS=LRS,Betas=Betas,SEs=SEs))
-       } else{
-
-       return(LRS)
-       }
-}
-
-#logistic regression mapping (for discrete cycle classification assignments ) 
-domap_logistic=function(gn, ss=F, ...) {
-    YY=cc.incidence[,gn]
-    DM=mmp1
-    fnbrN=fastglmPure(DM, YY, family=binomial())
-    #nmLLik=nbLL(fnbrN$y,fnbrN$fitted.value, theta.est)
-
-    LRS=rep(NA,ncol(Gsub))
-    names(LRS)=colnames(Gsub)
- 
-    if(ss){
-            Betas=LRS
-            SEs=LRS
-       }
-
-    #initialize the last column of DM to be 1s
-    XXn=cbind(DM,1)
-    idx=1:ncol(Gsub)
-    gcovn=(ncol(XXn))
-    for(gx in idx) { 
-       #colnames(Gsub)){
-        XXn[,gcovn]=Gsub[,gx]
-        fnbrF=fastglmPure(XXn, YY,  family=binomial())
-        #can just use deviances here 
-        LRS[gx]=fnbrN$deviance-fnbrF$deviance
-        if(ss){
-            Betas[gx]=as.numeric(fnbrF$coefficients[gcovn])
-            SEs[gx]=fnbrF$se[gcovn]
-           }
-        }
-       if(ss) {
-        return(list(LRS=LRS,Betas=Betas,SEs=SEs))
-       } else{
-
-       return(LRS)
-       }
-}
-
-
-
-
-
-
-
-           #-2*(nmLLik-nbLL(fnbrF$y,fnbrF$fitted.value, theta.est))
-
-#cc=read.csv(paste0(reference.dir, 'cell_cycle.csv')) #read.csv(paste0(
-
-LDprune=function(geno, m.granges, cor.cutoff=.999) {
-    G=standardise2(vg)
-    #prune markers 
-    chr.ind=split(1:length(m.granges), as.character(seqnames(m.granges)))
-    G.chr=lapply(chr.ind, function(x) G[,x])
-    Gcor.chr=lapply(G.chr, function(x) crossprod(x)/(nrow(x)-1))
-    fcm.chr=lapply(Gcor.chr, function(x) caret::findCorrelation(x,cutoff=cor.cutoff, verbose=F) )
-    fcm=as.vector(unlist(mapply(function(x,y) x[y],  sapply(G.chr, colnames), fcm.chr)))
-    m.to.keep=which(!colnames(vg)%in% fcm) #colnames(vg)[fcm])
-    Gsub=vg[,m.to.keep]
-    rm(Gcor.chr)
-    m.to.keep=match(colnames(Gsub), colnames(vg))
-    markerGRr=m.granges[m.to.keep]
-    return(list(Gsub=Gsub, markerGRr=markerGRr))
-}
-
-
-#overwrite these functions
-
-getCisMarker=function(sgd.genes, m.granges, counts) {
-    Yre=t(counts)
-    markerGR=m.granges
-    sgd.genes=sgd.genes[match(colnames(Yre), sgd.genes$gene_id),]
-    tag=sgd.genes
-
-    cisMarkers=data.frame(transcript=sgd.genes$gene_id, 
-                          marker=m.granges$sname[nearest(tag,markerGR)],
-                          stringsAsFactors=F)
-    cisMarkers=na.omit(cisMarkers)
-    return(cisMarkers)
-    #indices of cis eQTL in 
-    #rows are transcripts, columns are markers
-    #cis.index=cbind(match(cisMarkers$transcript, colnames(Yre)), match(cisMarkers$marker, colnames(G)))
-}
-
-doCisNebula2=function(x,...) { # mmp1,counts,Gsub){
-        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
-        yind=match(x$transcript, rownames(counts))
-        NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
-        
-        #NBcis$summary$gene=rownames(counts)[yind]
-        return(NBcis)
-    }
-
-#for the original ByxRM with repeated measures
-doCisNebula3=function(x,...) { # mmp1,counts,Gsub){
-       
-        mmpN=cbind(mmp1, Gsub[,x$marker[1]])
-        yind=match(x$transcript, rownames(counts))
-       
-        df=data.frame(id=factor(best_match_seg))
-      
-        mmpN=mmpN[order(df$id),]
-        countmat=counts[yind,order(df$id)]
-        df.id=df[order(df$id),]
-
-        NBcis=nebula(count=countmat, id=df.id, pred=mmpN) 
-
-        #NBcis=nebula(counts[yind,], mmpN[,1], pred=mmpN)
-        NBcis$summary$gene=rownames(counts)[yind]
-        return(NBcis)
-    }
-
-
-as_matrix <- function(mat){
-
-  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
-  
-  row_pos <- mat@i+1
-  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
-  val <- mat@x
-    
-  for (i in seq_along(val)){
-      tmp[row_pos[i],col_pos[i]] <- val[i]
-  }
-    
-  row.names(tmp) <- mat@Dimnames[[1]]
-  colnames(tmp) <- mat@Dimnames[[2]]
-  return(tmp)
-}
-
-getGlobalPeaks=function( LODr,markerGR,transcript.data, 
-                        chroms=paste0('chr', as.roman(1:16)),
-                        fdrfx.fc=NULL,Betas=NULL,SEs=NULL) {
-    cPeaksT=list()
-    for(cc in chroms) {
-        print(cc)
-        moi=grep(paste0('^',cc,'_'), colnames(LODr))
-        rS=LODr[,moi]
-        #mstat=apply(rS,1,max)
-        mstat.pos=Rfast::rowMaxs(abs(rS),value=F) #1,which.max)
-        lookup=cbind(1:length(mstat.pos), mstat.pos)
-        mstat=rS[lookup]
-        LODstat=LODr[,moi][lookup]
-        CIs=matrix(NA,length(mstat),2)
-        cmoi=colnames(LODr[,moi])
-        #this could use a speedup
-
-        for(peak in 1:length(mstat)){
-            LODrv=LODr[peak,moi]
-            CIs[peak,]=cmoi[range(which(LODrv>LODstat[peak]-1.5))]
-        }   
-        cPeaksT[[cc]]=data.frame( transcript=rownames(rS),
-                             peak.marker=colnames(rS)[mstat.pos],
-                             CI.l=CIs[,1],
-                             CI.r=CIs[,2],
-                             LOD=LODstat)
-       
-        if(!is.null(Betas)){
-            if(is.list(Betas)){
-                 for(n in names(Betas)){
-                    cPeaksT[[cc]][[paste0('Beta_',n)]]= Betas[[n]][,moi][lookup]
-                 }
-            }  else {
-                cPeaksT[[cc]]$Beta=Betas[,moi][lookup]
-            }
-        }
-        if(!is.null(SEs)){
-            if(is.list(SEs)){
-                for(n in names(SEs)){
-                    cPeaksT[[cc]][[paste0('SE_',n)]]= SEs[[n]][,moi][lookup]
-                 }
-
-            } else {
-            cPeaksT[[cc]]$SE=SEs[,moi][lookup]
-            }
-        }
-
-        if(!is.null(fdrfx.fc)){
-           cPeaksT[[cc]]$FDR=fdrfx.fc[['g.rtoFDRfx']](LODstat)
-           cPeaksT[[cc]]$FDR[is.na(cPeaksT[[cc]]$FDR)]=1
-           cPeaksT[[cc]]$FDR[(cPeaksT[[cc]]$FDR)>1]=1
-        }
-    }
-    #inverse variance weights
-    #        w=1/SE^2
-    #        ivw.mean=sum(w*B)/sum(w)
-    #        ivw.se=sqrt(1/sum(w))
-
-    cP=rbindlist(cPeaksT, idcol='chrom')
-    cP$peak.marker=as.character(cP$peak.marker)
-    cP$chr=tstrsplit(cP$peak.marker, '_')[[1]]
-    cP$pos=as.numeric(tstrsplit(cP$peak.marker, '_')[[2]])
-    cP$CI.l=as.character(cP$CI.l)
-    cP$CI.r=as.character(cP$CI.r)
-    cP$CI.l=tstrsplit(cP$CI.l, '_', type.convert=T)[[2]]
-    cP$CI.r=tstrsplit(cP$CI.r, '_', type.convert=T)[[2]]
-  
-    cP$tchr=as.character(transcript.data$chromosome_name)[match(cP$transcript, transcript.data$gene_id)]
-    cP$tpos=transcript.data$start_position[match(cP$transcript, transcript.data$gene_id)]
-    cP=cP[cP$tchr %in% rev(chroms), ]#c("X","V","IV","III","II","I"),]
-    cP$tchr=factor(cP$tchr,levels=rev(chroms)) #c("X","V","IV","III","II","I"))
-    cP$chr=factor(cP$chr,levels=chroms)        #rev(c("X","V","IV","III","II","I")))
-    return(cP)
-}
-
-plotEQTL=function(cPf, titleme='',CI=T) {
-  a=ggplot(cPf,aes(x=pos,y=tpos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_point()+
-        #,color=cPf$Beta/cPf$SE
-        #scale_colour_viridis_c()+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(tchr~chr,scales="free", space='free')+
-        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-    if(CI) {
-        a=a+geom_segment(aes(x = CI.l, y = tpos, xend = CI.r, yend = tpos)) 
-    }
-    return(a)
-}
-
-plotHotspot=function(cPf, titleme='') {
-      h=ggplot(cPf,aes(x=pos)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_histogram(binwidth=50000)+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-
-    hd=ggplot_build(h)$data[[1]]
-    sig.hp=qpois(1-(.05/length(hd$y)),ceiling(mean(hd$count)))+1 
-    h+geom_hline(yintercept=sig.hp)
-}
-
-plotHotspot2=function(cPf, titleme='') {
-      h=ggplot(cPf,aes(pos,count)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-        geom_bar(stat="identity", width=50000)+
-        xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-        facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-        theme_classic()+
-        theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-        theme(panel.spacing=unit(0, "lines"))+
-        ggtitle(titleme)
-
-       sig.hp=qpois(1-(.05/length(cPf$pos)),ceiling(mean(cPf$count)))+1 
-    h+geom_hline(yintercept=sig.hp)
-}
-
-makeBinTable=function(cPf, cbin50k) {
-    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
-
-    tlink.cnt=countOverlaps(unlist(cbin50k), tlinks)
-    bin.table=data.frame(chr=seqnames(unlist(cbin50k)),
-                         pos=round(start(unlist(cbin50k))+25000),
-                         count=tlink.cnt)
-    return(bin.table)
-}
-
-getBinAssignment=function(cPf, cbin50k) {
-    tlinks=makeGRangesFromDataFrame(data.frame(chr=cPf$chr, start=cPf$pos, end=cPf$pos, strand="*")) 
-
-    tlink.cnt=findOverlaps(tlinks, unlist(cbin50k))
-      
-    ub=unlist(cbin50k)
-    ub.id=paste0(seqnames(ub), ':', start(ub), '-', start(ub)+width(ub)-1)
-    cPf$bin=ub.id[subjectHits(tlink.cnt)]
-
-  
-    return(cPf)
-}
-
-# given a statistic that increases as a function significance 
-# and the same statistic calculated from permutations
-# and a table that maps transcripts to the closest marker for each transcript
-# calculate functions that map the statistic to FDR
-getFDRfx=function(LODr,LODperm, cisMarkers=NULL){
-
-    max.obsLOD=rowMaxs(LODr, value=T) #apply(abs(rff),1,max)
-    
-    vint=seq(0,max(max.obsLOD)+.01, .01)
-    
-    ll1=apply(LODperm,3,function(x) rowMaxs(x, value=T))
-
-    # global FDR  ---------------------------------------------------------------
-    obsPcnt = sapply(vint, function(thresh) { sum(max.obsLOD>thresh) }   )
-    names(obsPcnt) = vint
-
-    expPcnt = sapply(vint,  
-                 function(thresh) { 
-                     return(mean(apply(ll1,2,function(x) sum(x>thresh))))
-                 })
-    names(expPcnt) = vint 
-    pFDR = expPcnt/obsPcnt
-    
-    pFDR[is.na(pFDR)]=0
-    pFDR[!is.finite(pFDR)]=0
-    #to make sure this is monotonic
-    
-    pFDR = rev(cummax(rev(pFDR)))
-    g.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
-    g.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
-
-    if(!is.null(cisMarkers)) {
-        # local FDR --------------------------------------------------------------------
-        #ll2=lapply(ll, function(x) x$cmax)
-        cMsubset=cisMarkers[which(cisMarkers$transcript %in% rownames(LODr)),]
-        max.obsLODc=LODr[cbind(cMsubset$transcript, cMsubset$marker)]
-        ll2=apply(LODperm,3, function(x) x[cbind(cMsubset$transcript, cMsubset$marker)])
-
-        obsPcnt = sapply(vint, function(thresh) { sum(max.obsLODc>thresh) }   )
-        names(obsPcnt) = vint
-        
-        expPcnt = sapply(vint,  
-                     function(thresh) { 
-                         return(mean(apply(ll2,2,function(x) sum(x>thresh))))
-                     })
-
-        names(expPcnt) = vint 
-        pFDR = expPcnt/obsPcnt
-        
-        pFDR[is.na(pFDR)]=0
-        pFDR[!is.finite(pFDR)]=0
-        #to make sure this is monotonic
-        
-        pFDR = rev(cummax(rev(pFDR)))
-        c.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
-        c.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
-        #---------------------------------------------------------------------------------
-
-        return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx,
-                    c.fdrFX=c.fdrFX, c.rtoFDRfx=c.rtoFDRfx))
-    }
-
-    return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx))
-}
-
-
-
-
-       
-chroms=paste0('chr', as.roman(1:16)) 
-#c('I','II', 'III', 'IV', 'V', 'X')
-
-#some genome annotation
-sacCer3=BSgenome.Scerevisiae.UCSC.sacCer3
-reference.dir='/data/single_cell_eQTL/yeast/reference/'
-sgd.granges=import.gff(paste0(reference.dir, 'saccharomyces_cerevisiae.gff'))
-sgd=as.data.frame(sgd.granges)
-gcoord.key= build.gcoord.key(paste0(reference.dir, 'sacCer3.fasta'))
-sgd.genes=getSGD_GeneIntervals(reference.dir)
-sgd.genes$chromosome_name=seqnames(sgd.genes)
-sgd.genes$start_position=start(sgd.genes)
-
-# for now load all crosses--------------------------------------------------
-load(paste0(reference.dir, 'cross.list.RData'))
-load(paste0(reference.dir, 'parents.list.RData'))
-#reorganize
-crossL=list('A'=cross.list[['A']], 
-            'B'=cross.list[['B']], 
-            '3004'=cross.list[['3004']],
-            '393'=cross.list[['393']]
-
-)
-parentsL=list('A'=parents.list[['A']], 
-              'B'=parents.list[['B']], 
-              '3004'=parents.list[['3004']],
-              '393'=parents.list[['393']]
-)
-rm(cross.list)
-rm(parents.list)
-
-# need genetic map
-genetic.maps=lapply(crossL, extractGeneticMapDf)
-#----------------------------------------------------------------------------
-
-# set some variables---------------------------------------------------------
-base.dir='/data/single_cell_eQTL/yeast/'
-cranger.dir='filtered_feature_bc_matrix/'
-
-#GT.YJM145x : num [1:69385] 0 1 0 1 1 0 0 1 1 2 ...
-#  .. ..$ GT.YPS163a
-
-#.$ GT.CBS2888a : num [1:78041] 0 1 1 2 0 0 0 0 0 0 ...
-#  .. ..$ GT.YJM981x  : num [1:78041] 1 0 0 0 1 1 1 1 1 1 ...
-
-cList=list(
-           '01_2444_44_1-2'='B',
-           '02_2444_44-'='B',
-           '03_ByxRM_51-_1-2'='A',
-           '04_ByxRM_51-'='A',
-           '00_BYxRM_480MatA_1'='A',
-           '00_BYxRM_480MatA_2'='A',
-           '08_2444_cross_10k_Feb_21'='B',
-           '09_2444_cross_5k_Feb_21'='B',
-           '10_3004_cross_10k_Feb_21'='3004',
-           '11_3004_cross_5k_Feb_21'='3004',
-           '07_2444-cross-1'='B',
-           '07_2444-cross-2'='B',
-           '19_393_10k_May10'='393',
-           '20_393_20k_May10'='393',
-           '21_3004_10k_May10'='3004',
-           '22_3004_20k_May10'='3004'
-)
-
-hList=list(
-           '01_2444_44_1-2'=2^6.1,
-           '02_2444_44-'= 2^7.5,
-           '03_ByxRM_51-_1-2'=2^7,
-           '04_ByxRM_51-'=2^7.4,
-           '00_BYxRM_480MatA_1'=2^6.5,
-           '00_BYxRM_480MatA_2'=2^6.5,
-           '08_2444_cross_10k_Feb_21'=2^5.2,
-           '09_2444_cross_5k_Feb_21'= 2^4.9,
-           '10_3004_cross_10k_Feb_21'= 2^5.6,
-           '11_3004_cross_5k_Feb_21'=  2^4.9,
-           '07_2444-cross-1'  = 2^6,
-           '07_2444-cross-2'  = 2^5.5,
-           '19_393_10k_May10' = 2^5.2,
-           '20_393_20k_May10' = 2^5.1,
-           '21_3004_10k_May10'= 2^6,
-           '22_3004_20k_May10'= 2^6.7
-)
-
-
-experiments=names(cList)
-cdesig=as.vector(sapply(cList, function(x) x))
-het.thresholds=as.vector(sapply(hList, function(x) x))
-data.dirs=paste0(base.dir, 'processed/', experiments, '/')
-het.across.cells.threshold=.1
-
-cl <- makeCluster(36)
-clusterEvalQ(cl, {
-       library(fastglm)
-       library(Matrix)
-       library(MASS) 
-       library(nebula)
-       NULL  })
-
-nUMI_thresh=10000
-minInformativeCellsPerTranscript=128
-
-nperm=5
-
-#note sgd gene def is updated to include 3' utr               
-#sgd.genes=sgd.granges[sgd.granges$type=='gene',]
-#sgd.genes$gcoord=gcoord.key[as.character(seqnames(sgd.genes))]+start(sgd.genes)
-
-# RUN HMM 
-
-# combine experiments
-
-#good YPSxYJM was 11 and 12
-#7,8,
-
-sets=list(
-    '3004'=c(9,10),
-    'A'=c(3,4),
-    'B'=c(1,2,11,12))
-
-#build sets of recurring hets and distorted/unreliable markers  
-for(setn in names(sets)){
-
-    print(setn)
-    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
-    dir.create(comb.out.dir)
-    
-    exp.results=list()
-
-    # iterate over each experiment -----------------------------------------------
-    for( ee in  sets[[setn]] ) { 
-
-    #for(ee in c(1:6,13:16) ) { #5:length(experiments))
-    experiment=experiments[ee]
-    cross=crossL[[cdesig[ee]]]
-    parents=parentsL[[cdesig[ee]]]
-    data.dir=data.dirs[ee]
-    results.dir=paste0(base.dir, 'results/', experiment, '/')
-    dir.create(results.dir)
-
-    #clean up this crap-------------------------
-    gmap=genetic.maps[[cdesig[ee]]]
-    gmap.s=gmap; colnames(gmap.s)[2]='map'
-    gmap.s=split(gmap.s, gmap.s$chrom)
-    gmap.s=gmap.s[chroms]
-    gmap.s=jitterGmap(gmap.s)
-    saveRDS(gmap.s, file=paste0(results.dir, 'gmap.RDS'))
-    #-------------------------------------------
-   
-    #read in counts------------------------------------------------
-        counts=readMM(paste0(data.dir,cranger.dir,'matrix.mtx.gz'))
-        features=read.csv(paste0(data.dir,cranger.dir,'features.tsv.gz'), sep='\t',header=F, stringsAsFactors=F)
-        barcodes=read.csv(paste0(data.dir,cranger.dir,'barcodes.tsv'),sep='\t',header=F,stringsAsFactors=F)[,1]
-        # fix order of count matrix (put transcripts in genomic order) 
-        reorderme=(order(match(features[,1], sgd$Name)))
-        counts=counts[reorderme,]
-        features=features[reorderme,]
-        rownames(counts)=features[,1]
-        colnames(counts)=barcodes
-        saveRDS(counts, file=paste0(results.dir, 'counts.RDS'))
-    #-------------------------------------------------------------
-
-    # counts per parental allele (ref.counts and alt.counts, names not accurate) (fixes phasing) --------
-    # also filters out counts from heavily distorted variants /// update this with diploid ASE data or parental data when we have it
-        g.counts=getGenoInformativeCounts(data.dir, cranger.dir, gmap,parents, log2diff=8)
-        saveRDS(g.counts, file=paste0(results.dir, 'gcounts.RDS'))
-    #-----------------------------------------------------------------------------------------------------
-    
-    # can filter here for only sites that have informative variants in this data set,
-    # but this may make comparison across datasets difficult in the future, hold on this for now
-        rQTL.coded=encodeForRQTL(g.counts)
-        #saveRDS(rQTL.coded, file=paste0(results.dir, 'rQTLcoded.RDS'))
-    #----------------------------------------------------------------------------------------------------
-
-    het.count=apply(rQTL.coded, 2, function(x) sum(x==0,na.rm=T))
-    tot.count=colSums(g.counts[[1]]+g.counts[[2]]) #ref.counts+alt.counts)
-   
-    plot(log2(tot.count),log2(het.count),col="#00000022")  # manual inspection of total counts vs sites classified as hets
-    
-    # note this is classification as probably haploid (TRUE) or not (dipoid, remated segregant/doublet FALSE)
-    classification=het.count<het.thresholds[ee]
-    saveRDS(classification, file=paste0(results.dir, 'cellFilter.RDS'))
-
-    png(file=paste0(results.dir, 'plot_classify_haploids.png'), width=1024, height=1024)
-    ## add information about number of cells classified as haploid vs not
-    plot(log2(tot.count),log2(het.count), col=  classification+1,
-         xlab='log2(total geno informative reads)', ylab='log2(total heterozygous sites)', 
-         main=experiment, sub=paste('total = ', length(het.count),  ' haploid =', sum(classification) ) )#s[[experiment]])))
-    dev.off()
-
-    # identify unreliable sites (sites called as hets in some fraction of cells, re-evaluate threshold chosen here)
-    het.cells=!classification
-    recurring.hets=apply(rQTL.coded[,-het.cells],1,function(x) sum(x==0,na.rm=T)) > (het.across.cells.threshold*sum(!het.cells))
-    print(sum(recurring.hets))
-    print(sum(recurring.hets)/nrow(rQTL.coded)) 
-
-    tmp=as_matrix(g.counts$ref.counts[,-het.cells])
-    rsum=Rfast::rowsums(tmp)
-    rm(tmp)
-    tmp=as_matrix(g.counts$alt.counts[,-het.cells])
-    asum=Rfast::rowsums(tmp)
-    rm(tmp)
-    #rsum=apply(g.counts$ref.counts[,-het.cells], 1, sum)
-    #asum=apply(g.counts$alt.counts[,-het.cells],1, sum)
-    af=(rsum/(rsum+asum))
-    names(af)=rownames(g.counts$ref)
-    #af[(rsum+asum)<10]=NA
-    af=data.frame(chr=tstrsplit(names(af), '_')[[1]], pos=as.numeric(tstrsplit(names(af), '_')[[2]]), 
-                     rsum=rsum, asum=asum, tcnt=rsum+asum, af=af)
-    af$chr=factor(af$chr, levels=paste0('chr', as.roman(1:16)))
-    af$af.folded=abs(af$af-.5)
-    af$recurring.hets=recurring.hets
-    rownames(af)=names(recurring.hets)
-
-    saveRDS(af, file=paste0(results.dir, 'af.RDS'))
-    rm(rQTL.coded)
-
-    }
-}
-
-
-
-
-    #per suggestion of James, run HMM on everything to start
-    
-    #cross2=buildCross2(rQTL.coded, gmap, 'riself', het.sites.remove=T, het.cells.remove=F,
-    #                   het.cells=het.cells, recurring.hets=recurring.hets)
-    #rqtl.genoprobs=calc_genoprob(cross2, error_prob=.005, lowmem=F, quiet=F, cores=16)
-    #rqtl.genoprobs=do.call('cbind', sapply(rqtl.genoprobs, function(x) x[,2,]))
-    #saveRDS(rqtl.genoprobs, file=paste0(results.dir, 'rqtl_genoprobs.RDS'))
-    #emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
-    #                                    recurring.het.sites.remove=T,
-    #                                    recurring.hets=recurring.hets)
-    #test=runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms[3], calc='viterbi',return.chr=T) #, n.indiv=1000)
-    #par(yaxs='i')
-    #plot(colSums(test[which(classification),]-1)/sum(classification), ylim=c(0,1))
-    #abline(h=.85)
-
-#aggregate results 
-af.results=list()
-for(setn in names(sets)){
-
-    print(setn)
-    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
-    dir.create(comb.out.dir)
-    
-
-    # iterate over each experiment -----------------------------------------------
-    for( ee in  sets[[setn]] ) { 
-
-    #for(ee in c(1:6,13:16) ) { #5:length(experiments)){
-    experiment=experiments[ee]
-    cross=crossL[[cdesig[ee]]]
-    parents=parentsL[[cdesig[ee]]]
-    data.dir=data.dirs[ee]
-    results.dir=paste0(base.dir, 'results/', experiment, '/')
-     af.results[[setn]][[experiment]]=readRDS(file=paste0(results.dir, 'af.RDS'))
-     af.results[[setn]][[experiment]]$flagged.marker=af.results[[setn]][[experiment]]$af.folded>.4 & af.results[[setn]][[experiment]]$tcnt>10
-    }
-}
-
-
-#assemble bad markers 
-bad.marker.list=lapply(af.results, function(y) { 
-             b=rowSums(sapply(y, function(x) { return(x$recurring.hets | x$flagged.marker) } ) )
-             names(b)=rownames(y[[1]])
-             return(b)
-                     })
-#saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
-
-#calculate hmm
-for(setn in names(sets)){
-
-    print(setn)
-    comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
-    dir.create(comb.out.dir)
-    
-    exp.results=list()
-
-    recurring.hets=bad.marker.list[[setn]]
-    recurring.hets=recurring.hets>0
-
-    # iterate over each experiment -----------------------------------------------
-    for( ee in  sets[[setn]] ) { 
-        print(ee)
-        #for(ee in c(1:6,13:16) ) { #5:length(experiments))
-        experiment=experiments[ee]
-        cross=crossL[[cdesig[ee]]]
-        parents=parentsL[[cdesig[ee]]]
-        data.dir=data.dirs[ee]
-        results.dir=paste0(base.dir, 'results/', experiment, '/')
-
-
-        gmap.s=readRDS(paste0(results.dir, 'gmap.RDS'))
-        
-        g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
-        tmp=as_matrix(g.counts$ref.counts[,-recurring.hets])
-        #rsum=Rfast::colsums(tmp)
-        #rm(tmp)
-        tmp1=as_matrix(g.counts$alt.counts[,-recurring.hets])
-        asum=Rfast::rowsums(tmp)
-        #rm(tmp1)
-        tmp2=tmp+tmp1
-        print(colsums(tmp2>0))
-        #note recurring.hets contains all flagged markers for removal
-        emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
-                                            recurring.het.sites.remove=T,
-                                            recurring.hets=recurring.hets)
-        print('calculating genotype probabilities')
-        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='genoprob') #, n.indiv=1000)
-        print('calculating viterbi path')
-        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
-}
-
-}
 
 
 
@@ -953,7 +151,36 @@ for(set in names(sets)){
     print("calculating dispersions")
 
     if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
-              
+    #if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+        load('/data/eQTL/gdata_42k.RData')
+        prevG=gdata
+        rm(gdata)
+        colnames(prevG)=gsub(':', '_', colnames(prevG))
+        scname=tstrsplit(colnames(prevG),'_')
+        scname=paste0(scname[[1]], '_', scname[[2]], '_', tstrsplit(scname[[3]],'/')[[1]], '_',tstrsplit(scname[[3]],'/')[[2]] )
+        colnames(prevG)=scname
+
+    # line up with existing genotypes 
+        vg2=vg
+        vg2name=tstrsplit(colnames(vg2), '_')
+        colnames(vg2)=paste0(vg2name[[1]], '_', vg2name[[2]], '_', vg2name[[3]], '_', vg2name[[4]])
+
+        matchingmarkers=colnames(vg2)[colnames(vg2) %in% colnames(prevG)]
+        vg2=vg2[,matchingmarkers]
+        prevG=prevG[,matchingmarkers]
+        stvg2=scale(t(vg2))
+        sprevG=scale(t(prevG))   
+    # find best match genotype
+        allcors=crossprod(stvg2, sprevG)/(nrow(sprevG)-1)
+        best_match_seg=rownames(prevG)[(apply(allcors, 1 , which.max))]
+        best_match_seg.r=apply(allcors, 1 , max)
+ 
+        segMatch=data.frame(mmp1, best_match_seg=best_match_seg, best_match_seg.r=best_match_seg.r)
+        saveRDS(segMatch, file=paste0(comb.out.dir, 'segMatch.RDS'))
+   
+   #     rm(prevG); rm(vg2); rm(stvg2); rm(sprevG)
+    #}
+            
             df=data.frame(id=factor(best_match_seg))
             mmp2=mmp1[order(df$id),]
             countmat=counts[expressed.transcripts,order(df$id)]
@@ -1009,6 +236,100 @@ for(set in names(sets)){
     saveRDS(segDataList, file=paste0(comb.out.dir, 'segData.RDS'))
 }
 
+data=data.frame(l_ctot=mmp1[,2], expt=mmp1[,3], Zid=best_match_seg, Cid=cc.df$cell_cycle)
+bGLMMs=list()
+for(i in 1:ncol(Yr)){
+    print(i)
+    bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
+}
+saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
+thetas=sapply(bGLMMs, sigma)
+thetas[thetas>1000]=1000
+Z=model.matrix(Yr[,1]~Zid-1)
+C=model.matrix(Yr[,1]~Cid-1)
+ZtZ=Z%*%t(Z)
+CtZ=C%*%t(C)
+
+test.theta=.05
+cov=.5*ZtZ+.1*CtZ+.00001*diag(nrow(Z)) # #+.2*diag(nrow(Z))
+mvnormsim=mvnfast::rmvn(1, mu=rep(0, nrow(cov)), sigma=cov)
+y=MASS::rnegbin(nrow(cov), mu=exp(mvnormsim[1,]), theta=test.theta)
+test=glmmTMB(y~(1|Cid)+(1|Zid), family=nbinom2, control=glmmTMBControl(parallel=36))
+summary(test)
+sA=VarCorr(test)$cond$Zid[1]
+print(sA)
+sC=VarCorr(test)$cond$Cid[1]
+print(sC)
+lmbda=mean(exp((predict(test))))
+sgma=sigma(test)
+sC/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
+sA/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
+
+
+test2=glmer.nb(y~(1|Cid)+(1|Zid))
+as.data.frame(VarCorr(test2))
+#.1
+
+
+
+#llikF=rep(0,length(bGLMMs))
+llikF=sapply(bGLMMs, logLik)
+llikmZ=rep(NA,length(bGLMMs))
+llikmC=rep(NA, length(bGLMMs))
+names(llikmZ)=names(llikF)
+names(llikmC)=names(llikF)
+
+for(i in 1:ncol(Yr)){
+    if(is.na(llikF[i])){next;}
+    print(i)
+    x=bGLMMs[[i]]
+#    llikmZ[i]= logLik(update(x, . ~.-(1|Zid),control=glmmTMBControl(parallel=36)))
+    llikmC[i]= logLik(update(x, . ~.-(1|Cid),control=glmmTMBControl(parallel=36)))
+
+}
+scVCmodels=data.frame(gene=names(llikF),llikF=llikF, llikmZ=llikmZ, llikmC=llikmC)
+#saveRDS(scVCmodels, file=paste0(comb.out.dir, 'scVCmodels.RDS'))
+
+
+
+
+ssH2=matrix(0,ncol(Yr),4)
+for( i in 1:ncol(Yr)) {    
+#x=bGLMMs[[500]]
+#performance::icc(x)
+    x=bGLMMs[[i]]
+    lmbda=mean(exp((predict(x))))
+    sgma=sigma(x)
+    sA=as.numeric(VarCorr(x)$cond$Zid[1]) #VarCorr(x)$cond$Zid[1]
+    sC=as.numeric(VarCorr(x)$cond$Cid[1]) #VarCorr(x)$cond$Cid[1]
+    ssH2[i,1]=sC/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
+    ssH2[i,2]=sA/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
+    ssH2[i,3]=sC
+    ssH2[i,4]=sA
+}
+rownames(ssH2)=colnames(Yr)
+
+ssH2[is.na(llikF),]=NA
+
+sig.H2=p.adjust(pchisq(-2*(llikmZ-llikF),1, lower.tail=F), method='fdr')<.05
+
+etot=apply(Yr,2,sum,na.rm=T)
+
+gpois05=glmer(Yr[,100]~offset(l_ctot)+(1|Cid)+(1|Zid),data=data, family=poisson(link='log'))
+
+~ct+(1|Zid)+(1|Cid), family=poisson(link='log'))
+
+mu=(fixef(gpois04)$cond)
+Vg=.897
+Vcid=VarCorr(gpois04)$cond$Cid[1]
+Vzid=VarCorr(gpois04)$cond$Zid[1]
+Vp=Vcid+Vzid
+QGparams(mu=mu, var.a=Vzid, var.p=Vp,  theta=sigma(gpois04), model='negbin.log')
+
+    igv=insight::get_variance(gpois04)
+
+#heritabilit
+
 
 #glm (y ~ cc + gt)
 #glm (y ~ gt) for each cell cycle
@@ -1061,14 +382,14 @@ for(set in names(sets)){
 
         
         #testing mm stuff ---
-        GRM=tcrossprod(scale(Gsub))/ncol(Gsub)
-        colnames(GRM)=rownames(GRM)=1:nrow(mmp1)
+      #  GRM=tcrossprod(scale(Gsub))/ncol(Gsub)
+      #  colnames(GRM)=rownames(GRM)=1:nrow(mmp1)
 
-        pheno=data.frame(pheno=Yr[,'YPR028W'], mmp1, id=1:nrow(mmp1)) #rownames(mmp1)) 
-        names(pheno)=c('p', 'int', 'lUMI', 'experiment', 'id')
+       # pheno=data.frame(pheno=Yr[,'YPR028W'], mmp1, id=1:nrow(mmp1)) #rownames(mmp1)) 
+       # names(pheno)=c('p', 'int', 'lUMI', 'experiment', 'id')
         
-        test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=poisson(link='log'),verbose=T)
-        test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=quasipoisson(link='log'), verbose=T)
+       # test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=poisson(link='log'),verbose=T)
+       # test=glmmkin(p ~ lUMI + experiment, data=pheno, kins=GRM, id="id", family=quasipoisson(link='log'), verbose=T)
         #----------------
 
         print('calculating LODs')
@@ -1360,6 +681,9 @@ for(set in names(sets)){
     cnv=colnames(cc.matrix.manual)
     #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
     for(cn in cnv ){
+        #this 
+        cnn=gsub('/',':', cn)
+
         print(cn)
         Gsub=segDataList$Gsub
         Yr=segDataList$Yr
@@ -1376,16 +700,16 @@ for(set in names(sets)){
         clusterEvalQ(cl, { Y=Yr;    DM=mmp2;   return(NULL);})
 
 
-        QQ =   parLapply(cl, names(GPs)[1:16], doInt) 
-        names(QQ)=names(GPs)[1:16]
-        QQ=data.table::rbindlist(QQ, idcol='transcript')
-        QQ$LOD=QQ$LRS
-        QQ$LOD[is.na(QQ$LOD)]=0
-        QQ$LOD=QQ$LOD/(2*log(10))
+       #perform 2D scan between chr max ------------------------------------
+       QQ =   parLapply(cl, names(GPs)[1:16], doInt) 
+       names(QQ)=names(GPs)[1:16]
+       QQ=data.table::rbindlist(QQ, idcol='transcript')
+       QQ$LOD=QQ$LRS
+       QQ$LOD[is.na(QQ$LOD)]=0
+       QQ$LOD=QQ$LOD/(2*log(10))
+       saveRDS(QQ, file=paste0(comb.out.dir, 'LOD_NB_QQ_', cnn,'.RDS'))
+       #--------------------------------------------------------------------
 
-        cnn=gsub('/',':', cn)
-        saveRDS(QQ, file=paste0(comb.out.dir, 'LOD_NB_QQ_', cnn,'.RDS'))
-    
    #permutations        ------------------------------------------------------------------------------------------------    
         set.seed(100)
         LODpL=list()
@@ -1444,6 +768,7 @@ for(set in names(sets)){
     cnv=colnames(cc.matrix.manual)
     #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
     QQs=list()
+    QQsp=list()
     for(cn in cnv ){
         print(cn)
         cnn=gsub('/',':', cn)
@@ -1457,21 +782,76 @@ for(set in names(sets)){
         QQtemp$Q2= markerGR$name[Q2f]
         ddQ=paste0(QQtemp$transcript, QQtemp$Q1, QQtemp$Q2)
         QQs[[cnn]]=QQtemp[!duplicated(ddQ),]
+        QQtemp.perm=readRDS(paste0(comb.out.dir, 'LODperm_NB_QQ_', cnn, '.RDS'))
+        QQsp[[cnn]]=QQtemp.perm[!duplicated(ddQ),]
     }
-    iLODs[[set]]=QQs
+    iLODs[[set]]$obs=QQs
+    iLODs[[set]]$exp=QQsp
 }
 
 
 lapply(iLODs, function(x) lapply(x, function(y) y[y$LOD>6,]))
 
 
-
+#process stats for observed data 
 jLOD=lapply(iLODs, function(QQs) {
 
-    jLOD=rowSums(sapply(QQs, function(x) x$LOD))
-    jLOD=data.frame(QQs[[1]][,c(1:3)], LOD=jLOD)
-    return(jLOD)
-                             } )
+    jLOD=rowSums(sapply(QQs$obs, function(x) x$LOD))
+    jLOD=data.frame(QQs$obs[[1]][,c(1:3)], LOD=jLOD)
+    return(jLOD)                             } )
+
+#process stats for perm data
+jLODp=lapply(iLODs, function(QQs) {
+
+    jLODt=rowSums(do.call('cbind', (lapply(QQs$exp, function(x) x[,4]))))
+    jLODt=cbind(jLODt, rowSums(do.call('cbind', (lapply(QQs$exp, function(x) x[,5])))))
+    jLODt=cbind(jLODt, rowSums(do.call('cbind', (lapply(QQs$exp, function(x) x[,6])))))
+    jLODt=cbind(jLODt, rowSums(do.call('cbind', (lapply(QQs$exp, function(x) x[,7])))))
+    jLODt=cbind(jLODt, rowSums(do.call('cbind', (lapply(QQs$exp, function(x) x[,8])))))
+   
+ 
+    jLOD=data.frame(QQs$exp[[1]][,c(1:3)], jLODt) 
+    
+    #LOD=jLOD)
+    return(jLOD)                             } )
+
+
+#let's just do FDR manually here 
+
+for(set in names(jLOD) { 
+   #    set
+
+    x=jLOD[[set]]
+    max.obsLOD=sapply(split(x$LOD, x$transcript), max)
+
+    vint=seq(0,max(max.obsLOD)+.01, .01)
+
+    x=jLODp[[set]]
+    exp=sapply(4:8, function(i) {
+      sapply(split(x[,i], x$transcript), max) })
+
+    obsPcnt = sapply(vint, function(thresh) { sum(max.obsLOD>thresh) }   )
+    names(obsPcnt) = vint
+
+    expPcnt = sapply(vint,  
+                 function(thresh) { 
+                     return((apply(exp,2,function(x) sum(x>thresh))))
+                 })
+    expPcnt= apply(expPcnt, 2, mean)
+    names(expPcnt) = vint 
+    pFDR = expPcnt/obsPcnt
+    
+    pFDR[is.na(pFDR)]=0
+    pFDR[!is.finite(pFDR)]=0
+    #to make sure this is monotonic
+    
+    pFDR = rev(cummax(rev(pFDR)))
+    g.fdrFX=approxfun(pFDR, vint, ties=mean, rule=2)
+    g.rtoFDRfx=approxfun(vint,pFDR, ties=mean, rule=2)
+
+    }
+
+
 
     
 lapply(jLOD, function(x) x[x$LOD>6,])
