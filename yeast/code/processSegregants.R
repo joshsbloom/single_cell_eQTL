@@ -150,6 +150,7 @@ for(set in names(sets)){
     
     print("calculating dispersions")
 
+    # custom code for repeated measures mixed model 
     if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
     #if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
         load('/data/eQTL/gdata_42k.RData')
@@ -177,7 +178,18 @@ for(set in names(sets)){
  
         segMatch=data.frame(mmp1, best_match_seg=best_match_seg, best_match_seg.r=best_match_seg.r)
         saveRDS(segMatch, file=paste0(comb.out.dir, 'segMatch.RDS'))
-   
+    
+        #run negative binomial mixed model with cell cycle and heritability terms    
+        data=data.frame(l_ctot=mmp1[,2], expt=mmp1[,3], Zid=best_match_seg, Cid=cc.df$cell_cycle)
+        saveRDS(data, file=paste0(comb.out.dir, 'bGLMM_setup.RDS'))
+
+        bGLMMs=list()
+        for(i in 1:ncol(Yr)){
+            print(i)
+            bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
+        }
+        saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
+
    #     rm(prevG); rm(vg2); rm(stvg2); rm(sprevG)
     #}
             
@@ -236,13 +248,8 @@ for(set in names(sets)){
     saveRDS(segDataList, file=paste0(comb.out.dir, 'segData.RDS'))
 }
 
-data=data.frame(l_ctot=mmp1[,2], expt=mmp1[,3], Zid=best_match_seg, Cid=cc.df$cell_cycle)
-bGLMMs=list()
-for(i in 1:ncol(Yr)){
-    print(i)
-    bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
-}
-saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
+
+#custom sims 
 thetas=sapply(bGLMMs, sigma)
 thetas[thetas>1000]=1000
 Z=model.matrix(Yr[,1]~Zid-1)
@@ -250,27 +257,48 @@ C=model.matrix(Yr[,1]~Cid-1)
 ZtZ=Z%*%t(Z)
 CtZ=C%*%t(C)
 
-test.theta=.05
-cov=.5*ZtZ+.1*CtZ+.00001*diag(nrow(Z)) # #+.2*diag(nrow(Z))
-mvnormsim=mvnfast::rmvn(1, mu=rep(0, nrow(cov)), sigma=cov)
-y=MASS::rnegbin(nrow(cov), mu=exp(mvnormsim[1,]), theta=test.theta)
-test=glmmTMB(y~(1|Cid)+(1|Zid), family=nbinom2, control=glmmTMBControl(parallel=36))
-summary(test)
-sA=VarCorr(test)$cond$Zid[1]
-print(sA)
-sC=VarCorr(test)$cond$Cid[1]
-print(sC)
+sus=sort(unique(best_match_seg))
+A=tcrossprod(scale(t(sprevG[,sus])))/nrow(sprevG)
+A2=data.matrix(nearPD(A,corr=T)$mat)
+A2.inv=solve(A2)
+ZAtZ=Z%*%A%*%t(Z)
+
+test.theta=8
+sAv=rep(NA,100)
+sCv=rep(NA,100)
+for(i in 1:100) {
+    print(i)
+    cov=.2*ZtZ+.1*CtZ+.4*ZAtZ+.00001*diag(nrow(Z)) # #+.2*diag(nrow(Z))
+    mvnormsim=mvnfast::rmvn(1, mu=rep(0, nrow(cov)), sigma=cov)
+    y=MASS::rnegbin(nrow(cov), mu=exp(mvnormsim[1,]), theta=test.theta)
+    system.time({test=glmmTMB(y~(1|Cid)+(1|Zid), family=nbinom2, control=glmmTMBControl(parallel=36))})
+    summary(test)
+    sA=VarCorr(test)$cond$Zid[1]
+    print(sA)
+    sAv[i]=sA
+    sC=VarCorr(test)$cond$Cid[1]
+    print(sC)
+    sCv[i]=sC
+}
 lmbda=mean(exp((predict(test))))
 sgma=sigma(test)
 sC/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
 sA/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
 
-
 test2=glmer.nb(y~(1|Cid)+(1|Zid))
+data2=data
+data2$y=y
+
+#f=fitme(y~(1|Zid)+ corrMatrix(1|Zid), corrMatrix=A2, method='REML', family=Poisson(link='log'),data=data2)
+#f=fitme(y~1+(1|Zid)+corrMatrix(1|Zid), covStruct=list(corrMatrix=A2), method='REML', data=data2, family=Poisson(link="log"))
+system.time({f=fitme(y~1+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2)}) #Poisson(link="log"))})
+
 as.data.frame(VarCorr(test2))
-#.1
 
-
+# code to process results of repeated measures mixed model 
+set='Ap'
+comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+bGLMMs=readRDS(paste0(comb.out.dir, 'bGLMMs.RDS'))
 
 #llikF=rep(0,length(bGLMMs))
 llikF=sapply(bGLMMs, logLik)
@@ -279,21 +307,19 @@ llikmC=rep(NA, length(bGLMMs))
 names(llikmZ)=names(llikF)
 names(llikmC)=names(llikF)
 
+#fit reduced model 
 for(i in 1:ncol(Yr)){
     if(is.na(llikF[i])){next;}
     print(i)
     x=bGLMMs[[i]]
-#    llikmZ[i]= logLik(update(x, . ~.-(1|Zid),control=glmmTMBControl(parallel=36)))
+    llikmZ[i]= logLik(update(x, . ~.-(1|Zid),control=glmmTMBControl(parallel=36)))
     llikmC[i]= logLik(update(x, . ~.-(1|Cid),control=glmmTMBControl(parallel=36)))
-
 }
 scVCmodels=data.frame(gene=names(llikF),llikF=llikF, llikmZ=llikmZ, llikmC=llikmC)
 #saveRDS(scVCmodels, file=paste0(comb.out.dir, 'scVCmodels.RDS'))
 
-
-
-
-ssH2=matrix(0,ncol(Yr),4)
+#table of ICC results 
+ssH2=matrix(0,ncol(Yr),7)
 for( i in 1:ncol(Yr)) {    
 #x=bGLMMs[[500]]
 #performance::icc(x)
@@ -306,29 +332,45 @@ for( i in 1:ncol(Yr)) {
     ssH2[i,2]=sA/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
     ssH2[i,3]=sC
     ssH2[i,4]=sA
+#    trigamma(1/((1/lmbda)+(1/sgma)))
 }
 rownames(ssH2)=colnames(Yr)
+#ssH2[is.na(llikF),]=NA
 
-ssH2[is.na(llikF),]=NA
+ssH2[,5]=p.adjust(pchisq(-2*(llikmC-llikF),1,lower.tail=F),method='fdr')
+ssH2[,6]=p.adjust(pchisq(-2*(llikmZ-llikF),1, lower.tail=F), method='fdr')
+ssH2[,7]=tot.umis=apply(Yr,2,sum,na.rm=T)
+colnames(ssH2)=c('ICC.cc', 'ICC.H2', 'ccVar', 'H2Var', 'CC.q', 'H2.q', 'tot.umis')
+saveRDS(ssH2, file=paste0(comb.out.dir, 'scICC.RDS'))
 
-sig.H2=p.adjust(pchisq(-2*(llikmZ-llikF),1, lower.tail=F), method='fdr')<.05
 
-etot=apply(Yr,2,sum,na.rm=T)
+sigY=(which(ssH2[,'H2.q']<.1))
+bGLMMsA=list()
+for( i in sigY ){
+#f= #Poisson(link="log"))
+    print(colnames(Yr)[i])
+    bGLMMsA[[colnames(Yr)[i]]]=fitme(Yr[,i]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2)
+    print(bGLMMsA[[colnames(Yr)[i]]])
+}
 
-gpois05=glmer(Yr[,100]~offset(l_ctot)+(1|Cid)+(1|Zid),data=data, family=poisson(link='log'))
+system.time({f2=fitme(Yr[,3]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='REML', data=data2, family=negbin2) })
 
-~ct+(1|Zid)+(1|Cid), family=poisson(link='log'))
 
-mu=(fixef(gpois04)$cond)
-Vg=.897
-Vcid=VarCorr(gpois04)$cond$Cid[1]
-Vzid=VarCorr(gpois04)$cond$Zid[1]
-Vp=Vcid+Vzid
-QGparams(mu=mu, var.a=Vzid, var.p=Vp,  theta=sigma(gpois04), model='negbin.log')
 
-    igv=insight::get_variance(gpois04)
 
-#heritabilit
+system.time({f3=fitme(Yr[,3]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2) })
+lmbda=mean(exp(predict(f3)))
+sgma=sigma(f3)
+sA=VarCorr(f3)[1,3]
+sR=VarCorr(f3)[2,3]
+sC=VarCorr(f3)[3,3]
+ICC.A=sA/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+        #trigamma(1/((1/lmbda)+(1/sgma)))) #log(1+(1/lmbda)+(1/sgma)))
+ICC.R=sR/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+ICC.C=sC/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+
+
+#Poisson(link="log"))})
 
 
 #glm (y ~ cc + gt)
