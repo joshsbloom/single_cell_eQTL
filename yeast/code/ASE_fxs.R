@@ -327,15 +327,17 @@ getPhasedCountsPerTranscript=function(ase.Data, dip.Assignments, dip,
 
 
 
-doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
-                            nUMI.thresh=10000,informativeCellThresh=64,threads=48 ) {
-  #nUMI.thresh=10000
-  #informativeCellThresh=64
-  classified.cells=dip.Assignments$diploid_name==dip
-  selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip]
-  cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
-  p1=phasedCounts[[1]][cells.to.keep,]
-  p2=phasedCounts[[2]][cells.to.keep,]
+doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.table.in,
+                            nUMI.thresh=20000,informativeCellThresh=64,threads=36 ) {
+
+    #informativeCellThresh=64
+  selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip & 
+                                            dip.Assignments$barcode %in% cc.table.in$cell_name &
+                                            ase.Data$numi<nUMI.thresh ]
+  p1=phasedCounts[[1]][selected.barcodes, ] #cells.to.keep,]
+  p2=phasedCounts[[2]][selected.barcodes, ] 
+  
+    #nUMI.thresh=10000
   gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
   informativeCellsPerTranscript=colSums(gInfoTotals>0)
   genes.to.test=names(informativeCellsPerTranscript)[informativeCellsPerTranscript>informativeCellThresh]
@@ -343,14 +345,14 @@ doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
   #ef=rnorm(nrow(p2))
   #TO DO: build this (ef) into the ase.Data data structure 
   if(  length(unique(ase.Data$experiment.factor)) > 1 ) { 
-      ef=as.factor(ase.Data$experiment.factorNULL[cells.to.keep,])
+      ef=as.factor(ase.Data$experiment.factor[selected.barcodes])
   } else {
       ef=NULL
   }
-  bbin=mclapply(genes.to.test,
+  bbin=pbmclapply(genes.to.test,
     function(g,...){
         ex=cbind(p2[,g],p1[,g])
-        print(g)
+       # print(g)
         if(is.null(ef)){
             m=(glmmTMB(ex~1,family=glmmTMB::betabinomial(link='logit'))) 
         } else{
@@ -365,7 +367,7 @@ doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
             result$coefs= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
         }
         return(result)
-    },p1,p2,ef,mc.cores=threads)
+    },p1,p2,ef,mc.cores=threads,mc.style='txt')
   names(bbin)= sapply(bbin, function(x) x$gene) #genes.to.test[1:240]
 
   bbin.model.stats=rbindlist(lapply(bbin, function(x) x$stats),idcol='gene', fill=T)
@@ -378,26 +380,25 @@ doBetaBinomialTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
 }
 
 doBetaBinomialTestCC=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.table.in, cc.choice,
-                            nUMI.thresh=10000,informativeCellThresh=64,threads=48 ) {
-  #nUMI.thresh=10000
-  #informativeCellThresh=64
-  selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip & 
-                                            dip.Assignments$barcode %in% cc.table.in$cell_name &
-                                            ase.Data$numi<nUMI.thresh ]
+                            nUMI.thresh=20000,informativeCellThresh=64,threads=36 ) {
  
-  # classified.cells=dip.Assignments$diploid_name==dip
-  #cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
+  classified.cells=dip.Assignments$diploid_name==dip & 
+                                            dip.Assignments$barcode %in% cc.table.in$cell_name &
+                                            ase.Data$numi<nUMI.thresh
+  selected.barcodes=dip.Assignments$barcode[classified.cells ]
+    #  hist( log2(ase.Data$numi[dip.Assignments$diploid_name==dip & 
+    #                                            dip.Assignments$barcode %in% cc.table.in$cell_name]) ,breaks=50)
+
   p1=phasedCounts[[1]][selected.barcodes, ] #cells.to.keep,]
-  p2=phasedCounts[[2]][selected.barcodes, ] #cells.to.keep,]
+  p2=phasedCounts[[2]][selected.barcodes, ] #
   gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
+
   informativeCellsPerTranscript=colSums(gInfoTotals>0)
   genes.to.test=names(informativeCellsPerTranscript)[informativeCellsPerTranscript>informativeCellThresh]
   cc.table.s=cc.table.in[match(selected.barcodes, cc.table.in$cell_name),]
 
-  #ef=rnorm(nrow(p2))
-  #TO DO: build this (ef) into the ase.Data data structure 
   if(  length(unique(ase.Data$experiment.factor)) > 1 ) { 
-      ef=as.factor(ase.Data$experiment.factorNULL[cells.to.keep,])
+      ef=as.factor(ase.Data$experiment.factor[selected.barcodes])
   } else {
       ef=NULL
   }
@@ -411,12 +412,11 @@ doBetaBinomialTestCC=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.tabl
      cc=relevel(cc, names(table(cc))[which.max(table(cc))] ) # 'M/G1')
   }
 
-
-  bbin=mclapply(genes.to.test,
+  bbin=pbmclapply(genes.to.test,
     function(g,...){
         ex=cbind(p2[,g],p1[,g])
-        print(g)
-               if(is.null(ef)){
+        #print(g)
+        if(is.null(ef)){
             m=(glmmTMB(ex~cc,family=glmmTMB::betabinomial(link='logit'))) 
         } else{
             m=(glmmTMB(ex~ef+cc,family=glmmTMB::betabinomial(link='logit'))) 
@@ -425,12 +425,17 @@ doBetaBinomialTestCC=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.tabl
         result$stats=NULL
         result$coefs=NULL
         result$gene = g
-        if(!is.na(logLik(m))) {
+        result$contrasts=NULL
+        result$pairs=NULL
+        if(!is.na(logLik(m)) &  (m$fit$convergence==0) ) {
             result$stats=glance(m)
             result$coefs= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
+            ee=emmeans(m, 'cc')
+            result$contrasts=data.frame(ee)
+            result$pairs=data.frame(pairs(ee,adjust='none'))
         }
         return(result)
-    },p1,p2,ef,cc,mc.cores=threads)
+    },p1,p2,ef,cc,mc.cores=threads,mc.style='txt')
   names(bbin)= sapply(bbin, function(x) x$gene) #genes.to.test[1:240]
 
   bbin.model.stats=rbindlist(lapply(bbin, function(x) x$stats),idcol='gene', fill=T)
@@ -439,6 +444,9 @@ doBetaBinomialTestCC=function(dip,phasedCounts,dip.Assignments,ase.Data, cc.tabl
                                         #tidy(x, effects='fixed', component="cond", exponentiate=T, conf.int=T)),
                              idcol='gene', fill=T)
   bbin.model.results=left_join(bbin.model.coefs, bbin.model.stats)
+  attr(bbin.model.results, 'contrasts')=lapply(bbin, function(x) x$contrasts)
+  attr(bbin.model.results, 'pairs')=lapply(bbin, function(x) x$pairs)
+
   return(bbin.model.results)
 }
 
@@ -455,31 +463,42 @@ tidyDisp=function(m){
 }
 
 
-doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data, 
+doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in, 
                         reduced.gene.set=NULL,
-                        nUMI.thresh=10000,informativeCellThresh=64,threads=48) {
+                        nUMI.thresh=20000,informativeCellThresh=64,threads=36) {
 
-  classified.cells=dip.Assignments$diploid_name==dip
-  selected.barcodes=dip.Assignments$barcode[dip.Assignments$diploid_name==dip]
-  cells.to.keep=ase.Data$numi[classified.cells]<nUMI.thresh 
-  p1=phasedCounts[[1]][cells.to.keep,]
-  p2=phasedCounts[[2]][cells.to.keep,]
+  classified.cells=dip.Assignments$diploid_name==dip & 
+                                            dip.Assignments$barcode %in% cc.table.in$cell_name &
+                                            ase.Data$numi<nUMI.thresh
+  selected.barcodes=dip.Assignments$barcode[classified.cells ]
+    #  hist( log2(ase.Data$numi[dip.Assignments$diploid_name==dip & 
+    #                                            dip.Assignments$barcode %in% cc.table.in$cell_name]) ,breaks=50)
+
+  p1=phasedCounts[[1]][selected.barcodes, ] #cells.to.keep,]
+  p2=phasedCounts[[2]][selected.barcodes, ] #
   gInfoTotals=p1+p2 #phasedCounts[[1]][cells.to.keep,]+phasedCounts[[2]][cells.to.keep,]
   informativeCellsPerTranscript=colSums(gInfoTotals>0)
   genes.to.test=names(informativeCellsPerTranscript)[informativeCellsPerTranscript>informativeCellThresh]
+  cc.table.s=cc.table.in[match(selected.barcodes, cc.table.in$cell_name),]
 
   if(  length(unique(ase.Data$experiment.factor)) > 1 ) { 
       ef=as.factor(ase.Data$experiment.factorNULL[cells.to.keep,])
   } else {
       ef=NULL
   }
-  ncells=sum(cells.to.keep)
+ # ncells=sum(cells.to.keep)
+  ncells=length(selected.barcodes)
   cellID=factor(as.character(seq(1:ncells))) #length(r)
+
+  cc=as.factor(cc.table.s$cell_cycle)
+  cc=relevel(cc, 'M/G1')
+
   setup.vars=list(
         cellIDf=factor(c(cellID,cellID)),
         geno=factor(c(rep('A',ncells),rep('B',ncells))),
-        of2=c(log(ase.Data$numi[classified.cells][cells.to.keep]),
-               log(ase.Data$numi[classified.cells][cells.to.keep])),
+        of2=c(log(ase.Data$numi[classified.cells]),
+               log(ase.Data$numi[classified.cells])),
+        cc=c(cc,cc),
         ef=ef
         )
 
@@ -487,9 +506,9 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
     genes.to.test=genes.to.test[genes.to.test %in% reduced.gene.set]
   }
 
-  nbin=mclapply(genes.to.test, 
+  nbin=pbmclapply(genes.to.test, 
    function(g, ... ){
-        print(g)
+       # print(g)
         #r=rMat[cells.to.keep,g]
         #a=aMat[cells.to.keep,g]
         #efs=experiment.factor[paroi][numi[paroi]<5000]
@@ -499,18 +518,15 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         of2=setup.vars$of2
         geno=setup.vars$geno
         ef=setup.vars$ef
+        cc=setup.vars$cc
         if(is.null(ef)){
-            #remove random effect of cell
-            #(1|cellIDf)+
-            m0=glmmTMB(y~geno+offset(of2), family=nbinom2(link='log'))
+            m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log'))
             m =update(m0, dispformula=~geno) 
-            #m=glmmTMB(y~geno+(1|cellIDf)+offset(of2), dispformula=~geno, family=nbinom2(link='log'))
         }
         else {
             #(1|cellIDf)+
-            m0=glmmTMB(y~ef+geno+offset(of2), family=nbinom2(link='log'))
+            m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom2(link='log'))
             m =update(m0, dispformula=~geno) 
-
         }
         result=list()
         result$stats.red=NULL
@@ -521,7 +537,7 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         result$coefs.disp.full=NULL
        
         result$gene = g
-        if(!is.na(logLik(m))) {
+        if(!is.na(logLik(m)) & (m$fit$convergence==0) ) {
             result$stats.red=glance(m0)
             result$coefs.cond.red= tidy(m0, effects='fixed', component="cond", exponentiate=F, conf.int=F)
             result$stats.full=glance(m)
@@ -532,7 +548,7 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
         return(result)
         #if(!is.na(logLik(nbfit))){     nbin[[g]]=summary(nbfit)  } else {nbin[[g]]=NULL }
    },
-  p1,p2,setup.vars, mc.cores=48)
+  p1,p2,setup.vars, mc.cores=48,mc.style='txt')
 
  names(nbin)= sapply(nbin, function(x) x$gene) #genes.to.test[1:240]
 
@@ -552,6 +568,8 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,
  nbin.model.results.red=left_join(nbin.model.stats.red, nbin.model.coefs.red, by='gene')
 
  nbin.model.results=left_join(nbin.model.results.full, nbin.model.results.red, by=c('gene','effect', 'term'), suffix=c('', '.red'))
+
+ nbin.model.results$dispLRTp=pchisq(-2*( nbin.model.results$logLik.red- nbin.model.results$logLik),1,lower.tail=F)
 
  return(nbin.model.results)
 }
