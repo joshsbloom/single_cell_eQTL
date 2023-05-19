@@ -143,7 +143,7 @@ bad.marker.list=lapply(af.results, function(y) {
              names(b)=rownames(y[[1]])
              return(b)
                      })
-#saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
+saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
 
 #calculate hmm
 for(setn in names(sets)){

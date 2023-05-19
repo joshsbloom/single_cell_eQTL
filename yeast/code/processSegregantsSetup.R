@@ -490,7 +490,21 @@ getFDRfx=function(LODr,LODperm, cisMarkers=NULL){
     return(list(g.fdrFX=g.fdrFX,g.rtoFDRfx=g.rtoFDRfx))
 }
 
-
+# function to calculate effective number of tests given LD matrix
+#https://neurogenetics.qimrberghofer.edu.au/SNPSpD/Li2005.pdf
+getMeff_Li_and_Ji=function(cor.mat) {
+    evals = eigen(cor.mat,symmetric=T)$values
+    M = length(evals)
+    L = M-1
+    # Equation 5 from Li 
+    intevals=ifelse(evals>=1, 1, 0)
+    # modification for negative eigenvalues JB
+    # add up the contribution of fractional eigenvalues 
+    nonintevals=c(evals-floor(evals))[evals>0]
+    Meff.li=sum(intevals,nonintevals)
+    print(Meff.li)
+    return(Meff.li)
+}
 
 
        
@@ -611,10 +625,13 @@ nperm=5
 sets=list(
     '3004'=c(9,10),
     'A'=c(3,4),
-    'B'=c(1,2,11,12))
+    'B'=c(1,2,11,12),
+    'Ap'=c(5,6)
+)
 
 
-sets=list(
-          'Ap'=c(5,6)
-          )
+#sets=list(
+#          'Ap'=c(5,6)
+#          )
+cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
  

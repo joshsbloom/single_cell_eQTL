@@ -6,9 +6,6 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
 
 
-
-
-
 for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
@@ -352,23 +349,33 @@ for( i in sigY ){
     bGLMMsA[[colnames(Yr)[i]]]=fitme(Yr[,i]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2)
     print(bGLMMsA[[colnames(Yr)[i]]])
 }
+saveRDS(bGLMMsA, file=paste0(comb.out.dir, 'bGLMMsA.RDS'))
+
 
 system.time({f2=fitme(Yr[,3]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='REML', data=data2, family=negbin2) })
 
 
-
-
-system.time({f3=fitme(Yr[,3]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2) })
-lmbda=mean(exp(predict(f3)))
-sgma=sigma(f3)
-sA=VarCorr(f3)[1,3]
-sR=VarCorr(f3)[2,3]
-sC=VarCorr(f3)[3,3]
-ICC.A=sA/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+ssH2a=matrix(0,length(bGLMMsA),6)
+#system.time({f3=fitme(Yr[,3]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2) })
+for( i in 1:length(bGLMMsA)) {    
+    f3=bGLMMsA[[i]]
+    lmbda=mean(exp(predict(f3)))
+    sgma=sigma(f3)
+    sA=VarCorr(f3)[1,3]
+    sR=VarCorr(f3)[2,3]
+    sC=VarCorr(f3)[3,3]
+    ICC.A=sA/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
         #trigamma(1/((1/lmbda)+(1/sgma)))) #log(1+(1/lmbda)+(1/sgma)))
-ICC.R=sR/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
-ICC.C=sC/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
-
+    ICC.R=sR/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+    ICC.C=sC/(sA+sC+sR+log(1+(1/lmbda)+(1/sgma)))
+    ssH2a[i,1]=sA
+    ssH2a[i,2]=sR
+    ssH2a[i,3]=sC
+    ssH2a[i,4]=ICC.A
+    ssH2a[i,5]=ICC.R
+    ssH2a[i,6]=ICC.C
+}
+rownames(ssH2a)=names(bGLMMsA)
 
 #Poisson(link="log"))})
 
@@ -498,7 +505,6 @@ for(set in names(sets)){
 
 
 
-cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
 #get global peaks and make some plots 
 for(set in names(sets)){
     print(set)
@@ -542,12 +548,12 @@ for(set in names(sets)){
     #saveRDS(twgFDR, file=paste0(comb.out.dir, 'fdrfx_NB_', cnn,'.RDS')) #paste0(dout, 'FDRfx.RDS'))
     #GP=getGlobalPeaks(LOD,markerGR,sgd.genes,fdrfx.fc=twgFDR)
     
-    
     #fix this 
     addLp=replicate(nperm, addL)   #addLp=abind(addL, addL, addL, addL, addL, along=3)
 
     BetasList=list()
     SEsList=list()
+    cisTableList=list()
     for(cc in cycle.cats) {
         print(cc)
         L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cc,'.RDS'))
@@ -559,8 +565,20 @@ for(set in names(sets)){
         BetasList[[cc]]=Betas
         SEsList[[cc]]=SEs
         GP=getGlobalPeaks(L,markerGR,sgd.genes,fdrfx.fc=twgFDR,Betas=Betas,SEs=SEs)
-
         saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
+
+        cmarker.ind=cbind(1:nrow(L),
+                    match(cisMarkers$marker[match(rownames(L), cisMarkers$transcript)], colnames(L)) )
+        #extract the cis-only scan results 
+        cisTableList[[cc]]=data.frame(
+            transcript=rownames(L),
+            closest.marker=cisMarkers$marker[match(rownames(L), cisMarkers$transcript)],
+            LOD=L[cmarker.ind],
+            Beta=Betas[cmarker.ind],
+            SE=SEs[cmarker.ind] ,
+            FDR=twgFDR$c.rtoFDRfx(L[cmarker.ind])
+        )
+
         plotEQTL(GP[GP$FDR<.05,], titleme=cc)
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_', cc, '.png'), width=10, height=10)
       
@@ -578,9 +596,73 @@ for(set in names(sets)){
    saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
    plotEQTL(GP[GP$FDR<.05,], titleme='combined', CI=F)
    ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+   
+   cmarker.ind=cbind(1:nrow(addL),
+                    match(cisMarkers$marker[match(rownames(addL), cisMarkers$transcript)], colnames(addL)) )
+
+    cisTableList[['combined']]=data.frame(
+            transcript=rownames(addL),
+            closest.marker=cisMarkers$marker[match(rownames(addL), cisMarkers$transcript)],
+            LOD=addL[cmarker.ind],
+            #Beta=Betas[cmarker.ind],
+            #SEs=SEs[cmarker.ind] ,
+            FDR=twgFDRG$c.rtoFDRfx(addL[cmarker.ind])
+        )
+     saveRDS(cisTableList, file=paste0(comb.out.dir,'/cis_only_test_CombinedResults.RDS'))
+
+  str(cisTableList) 
    print(nrow(GP[GP$FDR<.1,]))
    print(nrow(GP[GP$FDR<.05,]))
 }
+
+# cell cycle x cis interactions 
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+
+    cisTableList=readRDS(file=paste0(comb.out.dir,'/cis_only_test_CombinedResults.RDS'))
+
+    # test for sig interactions between cell cycle betas
+    #process cis_only_test_CombinedResults.RDS
+    cTL=cisTableList[-length(cisTableList)]
+    ucontrasts=combn(names(cTL),2)
+    cTL.contrasts=list()
+    for (i in 1:ncol(ucontrasts)) {
+        coi=paste(ucontrasts[1,i], ucontrasts[2,i])
+
+        B1=cTL[[ucontrasts[1,i]]]$Beta
+        B2=cTL[[ucontrasts[2,i]]]$Beta
+
+        SE1=cTL[[ucontrasts[1,i]]]$SE
+        SE2=cTL[[ucontrasts[2,i]]]$SE
+
+        Zstat=(B1-B2)/sqrt(SE1^2+SE2^2)
+        pval=2*pnorm(-abs(Zstat),lower.tail=T)
+        cTL.contrasts[[coi]]=data.frame(transcript=cTL[[ucontrasts[1,i]]]$transcript, Zstat=Zstat, pval=pval)
+    }
+    saveRDS(cTL.contrasts, file=paste0(comb.out.dir,'/cis_only_test_CombinedResultsContrasts.RDS'))
+
+    sum(p.adjust(unlist(lapply(cTL.contrasts, function(x) x$pval)), method='fdr')<.05)
+    sort(unique(unlist(lapply(cTL.contrasts, function(x) x$transcript))[which(p.adjust(unlist(lapply(cTL.contrasts, function(x) x$pval)), method='fdr')<.05)]))
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -636,6 +718,17 @@ for(set in names(sets)){
     LOD=LOD/(2*log(10))
     rownames(LOD)=colnames(cc.incidence)
     #dir.create(paste0(base.dir, 'results/cell_cycle_v5/', experiment,'/'))
+
+    Gsub.s=scale(Gsub)
+    Cmat=(t(Gsub.s) %*% Gsub.s)/(nrow(Gsub)-1)
+    meff=getMeff_Li_and_Ji(Cmat)
+    #attr(LOD,'FWER_thresh_1%')= qchisq(2*(.01/meff),1,lower.tail=F)/(2*log(10))
+    attr(LOD,'FWER_thresh_5%')= qchisq(2*(.05/(meff*5)),1,lower.tail=F)/(2*log(10))
+    print(attr(LOD, 'FWER_thresh_5%'))
+    saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
+        
+    #qchisq(2*(.05/meff),1,lower.tail=F)/(2*log(10))
+
     saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
 
     Betas=do.call('rbind', lapply(bunchoflists,function(x)x$Betas))
@@ -907,7 +1000,6 @@ hist(pchisq((2*log(10))*jLOD[[3]]$LOD,1, lower.tail=F))
 
 
 
-
 #not incorporated yet 03/29/22
 fitNBTransModel=function(tcP, Yk, Gsub,  cisNB, mmp1, cMsubset,sig=.1 ) {
         tcPsig=data.frame(tcP[tcP$FDR<sig,])
@@ -968,78 +1060,8 @@ for(set in names(sets)){
     
 }
 
-
-hotspotList=list()
-for(set in names(sets)){
-    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
-    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
-
-   
-    Gsub=segDataList$Gsub
-
-    markerGR=getMarkerGRanges(list(t(Gsub)))
-
-
-    cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
-    cmin[!is.na(cmin)]=0
-    cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
-
-    cbin=data.frame(chr=names(cmin),
-                    start=cmin,
-                    end=cmax, 
-                    strand="*")
-    cbin=makeGRangesFromDataFrame(cbin)
-    ###########################################################################################################3
-    # analyze within each sub experiment 
-    cbin50k=GenomicRanges::tile(cbin, width=50000)
-
-
-   GP=readRDS(file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
-  
-    # plotEQTL(GP[GP$LOD>4,], titleme='combined', CI=F)
-   # cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
-   cPf=GP[GP$FDR<.05 & GP$chr!=GP$tchr,]
-    
-   bin.table=makeBinTable(cPf, cbin50k)
-   cH=plotHotspot2(bin.table,titleme=set)
-
-   cPf=getBinAssignment(cPf, cbin50k)
-   sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
-
-   sig.hp.names=table(cPf$bin)>sig.hp
-   cPf$in.hotspot=sig.hp.names[cPf$bin]
-
-    plist=list()
-    plist[['combined']]=cPf
-
-    hlist=list()
-    for(cc in cycle.cats) {
-         GP=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle_peaks_', cc,'.RDS'))
-         #    cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
-         cPf=GP[GP$FDR<.05 & GP$chr!=GP$tchr,]
-
-         bin.table=makeBinTable(cPf, cbin50k)
-         cPf=getBinAssignment(cPf, cbin50k)
-         sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
-         sig.hp.names=table(cPf$bin)>sig.hp
-         cPf$in.hotspot=sig.hp.names[cPf$bin]
-         hlist[[cc]]=plotHotspot2(bin.table, titleme=cc)
-         plist[[cc]]=cPf
-     }
-    
-    ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
-        ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
-    saveRDS(plist, file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))
-    hotspotList[[set]]=plist
-}
-
-
-
-
-lapply(hotspotList, function(x) { unique(x$combined$bin[x$combined$in.hotspot]) })
-
-
-
+#get significant hotspot bins and test for trans-eQTL x CC interactions 
+source('/data/single_cell_eQTL/yeast/code/segregantHotspots.R')
 
 
 
