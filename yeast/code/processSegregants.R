@@ -5,6 +5,8 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsSetup.R')
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
 
+#combine information from multiple batches for different segregant panels 
+source('/data/single_cell_eQTL/yeast/code/processSegregantsCombine.R')
 
 for(set in names(sets)){
     print(set)
@@ -126,7 +128,8 @@ for(set in names(sets)){
     pruned=LDprune(vg, m.granges)
     Gsub=pruned$Gsub
     markerGRr=pruned$markerGRr
-    rm(pruned)
+  
+  #  rm(pruned)
 
     infoCells=rowSums(counts>0)
     expressed.transcripts=names(infoCells)[(infoCells>minInformativeCellsPerTranscript)] #names(sum(infoCells>128)) #[infoCells>128,]
@@ -165,10 +168,15 @@ for(set in names(sets)){
 
         matchingmarkers=colnames(vg2)[colnames(vg2) %in% colnames(prevG)]
         vg2=vg2[,matchingmarkers]
-        prevG=prevG[,matchingmarkers]
+
+        pruned2=LDprune(vg2, m.granges)
+        markerGRr2=pruned2$markerGRr
+      
+        prevGr=prevG[,matchingmarkers]
         stvg2=scale(t(vg2))
-        sprevG=scale(t(prevG))   
-    # find best match genotype
+        sprevG=scale(t(prevGr))   
+ 
+        # find best match genotype
         allcors=crossprod(stvg2, sprevG)/(nrow(sprevG)-1)
         best_match_seg=rownames(prevG)[(apply(allcors, 1 , which.max))]
         best_match_seg.r=apply(allcors, 1 , max)
@@ -180,6 +188,8 @@ for(set in names(sets)){
         data=data.frame(l_ctot=mmp1[,2], expt=mmp1[,3], Zid=best_match_seg, Cid=cc.df$cell_cycle)
         saveRDS(data, file=paste0(comb.out.dir, 'bGLMM_setup.RDS'))
 
+        gdataPrev=(prevG+1)/2
+   
         bGLMMs=list()
         for(i in 1:ncol(Yr)){
             print(i)
@@ -188,34 +198,92 @@ for(set in names(sets)){
         saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
 
    #     rm(prevG); rm(vg2); rm(stvg2); rm(sprevG)
-    #}
             
-            df=data.frame(id=factor(best_match_seg))
-            mmp2=mmp1[order(df$id),]
-            countmat=counts[expressed.transcripts,order(df$id)]
-            df.id=df[order(df$id),]
-            nullNB=nebula(count=countmat, id=df.id, pred=mmp2) 
+      df=data.frame(id=factor(best_match_seg))
+      mmp2=mmp1[order(df$id),]
+      countmat=counts[expressed.transcripts,order(df$id)]
+      df.id=df[order(df$id),]
+      nullNB=nebula(count=countmat, id=df.id, pred=mmp2) 
+    
     } else {
            nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
     }
     
     dispersion.df=data.frame(gene=nullNB$summary$gene, theta.null=1/nullNB$overdispersion[,2])
-    
+   
     cisMarkers=getCisMarker(sgd.genes[sgd.genes$gene_id %in% dispersion.df$gene,],
                             markerGRr, t(Yr[,colnames(Yr) %in% dispersion.df$gene]) ) #counts)
     cSplit=split(cisMarkers, cisMarkers$marker)
 
 
     if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
-         clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
-          system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
-        } else {
+       
+
+        cisMarkers2=getCisMarker(sgd.genes[sgd.genes$gene_id %in% dispersion.df$gene,],
+                            markerGRr2, t(Yr[,colnames(Yr) %in% dispersion.df$gene]) ) 
+        n=tstrsplit(cisMarkers2$marker, '_')[-5]
+
+        cisMarkers2$marker=paste0(n[[1]],'_', n[[2]], '_', n[[3]], '_', n[[4]])
+        cisMarkers2=cisMarkers2[-which(is.na(match(cisMarkers2$marker, colnames(gdataPrev)))),]
+        
+        #counts)
+        cSplit2=split(cisMarkers2, cisMarkers2$marker)
+
+        GsubPlaceholder=Gsub
+        cSplitPlacheholder=cSplit
+
+        Gsub=gdataPrev[segMatch$best_match_seg, ] #as.character(df.id),]
+        rownames(Gsub)=rownames(GsubPlaceholder) #[order(df$id)]
+        cSplit=cSplit2
+        Gsub=Gsub[, unique(cisMarkers2$marker)]
+
+        clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
+        system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
+        names(cisNB)=names(cSplit)
+        
+        saveRDS(cisNB, file=paste0(comb.out.dir, 'cisNB2_prevG.RDS'))
+        cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
+        cis.beta=as.vector(unlist(sapply(cisNB, function(x) x$summary$logFC_)))
+        cis.gene=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+
+        pGenoCis=data.frame(gene=cis.gene, beta=cis.beta, p=cis.ps)
+
+        cisNB=readRDS(paste0(comb.out.dir, 'cisNB2.RDS'))
+        cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
+        cis.beta=as.vector(unlist(sapply(cisNB, function(x) x$summary$logFC_)))
+        cis.gene=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+
+        nGenoCis=data.frame(gene=cis.gene, beta=cis.beta, p=cis.ps)
+        nGenoCis=nGenoCis[nGenoCis$gene %in% pGenoCis$gene,]
+        
+       
+        Gsub=GsubPlaceholder
+        cSplit=cSplitPlacheholder
+        rm(GsubPlaceholder) 
+        clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
+        system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
+
+
+    } else {
              clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
              system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
     }
     names(cisNB)=names(cSplit)
-
     saveRDS(cisNB, file=paste0(comb.out.dir, 'cisNB2.RDS'))
+
+    if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
+        cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
+        cis.beta=as.vector(unlist(sapply(cisNB, function(x) x$summary$logFC_)))
+        cis.gene=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
+        nGenoCis=data.frame(gene=cis.gene, beta=cis.beta, p=cis.ps)
+        nGenoCis=nGenoCis[nGenoCis$gene %in% pGenoCis$gene,]
+    
+        geno_cis_comp=list(prevGenoCis=pGenoCis,
+             hmmGenoCis=nGenoCis)
+        saveRDS(geno_cis_comp, file=paste0(paste0(comb.out.dir, 'geno_cis_comp.RDS')))
+
+    }
+      
     cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
     names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
 
@@ -355,6 +423,7 @@ saveRDS(bGLMMsA, file=paste0(comb.out.dir, 'bGLMMsA.RDS'))
 system.time({f2=fitme(Yr[,3]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='REML', data=data2, family=negbin2) })
 
 
+bGLMMsA=readRDS(paste0(comb.out.dir, 'bGLMMsA.RDS'))
 ssH2a=matrix(0,length(bGLMMsA),6)
 #system.time({f3=fitme(Yr[,3]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2) })
 for( i in 1:length(bGLMMsA)) {    
@@ -376,6 +445,9 @@ for( i in 1:length(bGLMMsA)) {
     ssH2a[i,6]=ICC.C
 }
 rownames(ssH2a)=names(bGLMMsA)
+colnames(ssH2a)=c('AVar', 'RVar', 'ccVar', 'ICC.A', 'ICC.R', 'ICC.cc') #'ICC.cc', 'ICC.H2', 'ccVar', 'H2Var', 'CC.q', 'H2.q', 'tot.umis')
+
+saveRDS(ssH2a, file=paste0(comb.out.dir, 'scICC_3VC.RDS'))
 
 #Poisson(link="log"))})
 
@@ -1061,7 +1133,7 @@ for(set in names(sets)){
 }
 
 #get significant hotspot bins and test for trans-eQTL x CC interactions 
-source('/data/single_cell_eQTL/yeast/code/segregantHotspots.R')
+source('/data/single_cell_eQTL/yeast/code/processSegregantsHotspots.R')
 
 
 
