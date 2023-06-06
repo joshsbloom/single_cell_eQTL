@@ -506,8 +506,9 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
     genes.to.test=genes.to.test[genes.to.test %in% reduced.gene.set]
   }
 
-  nbin=pbmclapply(genes.to.test, 
-   function(g, ... ){
+ nbin=pbmclapply(genes.to.test, 
+#nbin=lapply(genes.to.test,
+    function(g, ... ){
        # print(g)
         #r=rMat[cells.to.keep,g]
         #a=aMat[cells.to.keep,g]
@@ -520,13 +521,13 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
         ef=setup.vars$ef
         cc=setup.vars$cc
         if(is.null(ef)){
-            m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log'))
-            m =update(m0, dispformula=~geno) 
+            m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
+            m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
         }
         else {
             #(1|cellIDf)+
-            m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom2(link='log'))
-            m =update(m0, dispformula=~geno) 
+            m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom2(link='log') ) #, control=glmmTMBControl(parallel=36))
+            m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
         }
         result=list()
         result$stats.red=NULL
@@ -536,6 +537,8 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
         result$coefs.cond.full=NULL
         result$coefs.disp.full=NULL
        
+        result$emm.m=NULL
+        result$emm.d=NULL
         result$gene = g
         if(!is.na(logLik(m)) & (m$fit$convergence==0) ) {
             result$stats.red=glance(m0)
@@ -543,12 +546,13 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
             result$stats.full=glance(m)
             result$coefs.cond.full= tidy(m, effects='fixed', component="cond", exponentiate=F, conf.int=F)
             result$coefs.disp.full= tidyDisp(m)
-
+            result$emm.m=data.frame(emmeans(m,'geno'))
+            result$emm.d=data.frame(emmeans(m, 'geno', component='disp'))
         }
         return(result)
         #if(!is.na(logLik(nbfit))){     nbin[[g]]=summary(nbfit)  } else {nbin[[g]]=NULL }
    },
-  p1,p2,setup.vars, mc.cores=48,mc.style='txt')
+  p1,p2,setup.vars, mc.cores=36,mc.style='txt')
 
  names(nbin)= sapply(nbin, function(x) x$gene) #genes.to.test[1:240]
 
@@ -573,3 +577,26 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
 
  return(nbin.model.results)
 }
+
+
+#gm=rbindlist(sapply(nbin, function(x) (x$emm.m)),idcol='gene')
+#gd=rbindlist(sapply(nbin, function(x) (x$emm.d)),idcol='gene')
+
+#sg=unique(nbin.model.results[p.adjust(nbin.model.results$dispLRTp, method='fdr')<.01,]$gene)
+#A.mean=gm[gm$gene %in% sg & gm$geno=='A',]
+#B.mean=gm[gm$gene %in% sg & gm$geno=='B',]
+#A.od=gd[gd$gene %in% sg & gd$geno=='A',]
+#B.od=gd[gd$gene %in% sg & gd$geno=='B',]
+
+
+
+#plot(A.mean$emmean, log(1/exp(A.od$emmean)), col='black')
+#points(B.mean$emmean, log(1/exp(B.od$emmean)), col='red')
+#segments(A.mean$emmean,log(1/exp(A.od$emmean)), B.mean$emmean,  log(1/exp(B.od$emmean)))
+#points(gm$emmean, log(1/exp(gd$emmean)), pch='.')
+
+
+#unique(nbin.model.results[p.adjust(nbin.model.results$dispLRTp, method='fdr')<.01,]$gene)
+#sapply(nbin, function(x) x$emm.d)
+
+

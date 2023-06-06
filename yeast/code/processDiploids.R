@@ -70,7 +70,7 @@ cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_
        
 
 
-for(experiment.name in names(experiments)[3:7] ){
+for(experiment.name in names(experiments)[1:7] ){
     input.diploids=experiments[[experiment.name]]
     #for output 
     dir.create(paste0(results.base.dir,experiment.name))
@@ -114,15 +114,15 @@ for(experiment.name in names(experiments)[3:7] ){
         if(length(table(cc.df$cell_cycle))>1) {
 
         print('beta-bin no cc')
-        bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data, cc.df)
-        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+#        bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data, cc.df)
+#        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
 
         #get cell cycle data ... the old classifications 
         #cc.table=readr::read_csv(paste0("/data/single_cell_eQTL/yeast/results/cell_cycle/",experiment.name,'/',dip, '/', 'cell_cycle_assignments.csv'))[,-1]
         print('beta-bin cc')
             #use hand annotation for cell cycle
-        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, 'manual') # cc.table, "manual")
-        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.RDS'))
+#        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, 'manual') # cc.table, "manual")
+#        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.RDS'))
        # qsave(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.qs'),nthreads=36)
         #use seurat for cell cycle annotation
         #bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, "seurat")
@@ -216,20 +216,23 @@ for(experiment.name in names(experiments)){
 
 
 
-        #replace with logLik.disp
-#        a=ggplot(all_models %>% filter(!is.na(logLik)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) ,
-        
-        a=ggplot(all_models %>% filter(!is.na(logLik)) %>% mutate(sig.disp=p.adjust(p.llrt.disp,'fdr')<.01) ,
-            aes(x=estimate.disp, y=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
+
+    all_models$sign_filter=sign(all_models$estimate.disp)!=sign(all_models$estimate.cond)
+    all_models=all_models %>%  mutate(sig.disp=p.adjust(p.llrt.disp, 'fdr')<.05 & sign_filter)
+    saveRDS(all_models, (file=(paste0(results.base.dir,experiment.name,'/',dip,'-all_models.RDS'))))
+
+
+    a=all_models %>% filter(!is.na(logLik) & !is.na(sig.disp)) %>% ggplot( #p.adjust(p.llrt.disp,'fdr')<.01) ,
+            aes(y=-estimate.disp, x=estimate.cond,  #paste(p.adjust(p.value.disp,'fdr')<.05),
                col=log2(genoInfoCells))) + #log2(genoInfoCells))) +
             geom_point()+
           scale_colour_viridis() + # name='lodispersion q<.05') +
           #scale_colour_manual(name='wald dispersion q<.05', values=c('black','red')) +
-            xlab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
-            ylab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
-            geom_label_repel(aes(x=estimate.disp,
-                               y=estimate.cond,
-                               label=ifelse(sig.disp,gene,'')),max.overlaps=100)+theme_bw()+
+            ylab(paste('Dispersion effect negative-binomial', parent2, 'vs', parent1)) + 
+            xlab(paste('Mean effect negative-binomial', parent2, 'vs', parent1)) +  theme_bw()+
+            geom_label_repel(aes(y=-estimate.disp,
+                               x=estimate.cond,
+                               label=ifelse(sig.disp,gene,'')),max.overlaps=100000)+theme_bw()+
              ggtitle(paste(experiment.name, dip))
          b=ggplot(all_models %>% filter(!is.na(logLik)), aes(x=p.llrt.disp))+geom_histogram()+ xlab('(p) llrt disp effect')+theme_bw()
 
@@ -237,6 +240,26 @@ for(experiment.name in names(experiments)){
  
          ggarrange(a,b, nrow=2, heights=c(1,.25))
          ggsave(file=(paste0(results.base.dir,experiment.name,'/',dip,'-nbin_sigDisp_ASE.png')))
+
+ 
+ #sketch of attempt to model out the mean v overdispersion trend
+         #replace with logLik.disp
+#        a=ggplot(all_models %>% filter(!is.na(logLik)) %>% mutate(sig.disp=p.adjust(p.value.disp,'fdr')<.05) ,
+#         dd=(all_models[!is.na(all_models$logLik.cond) & !is.na(all_models$p.llrt.disp) & !is.na(all_models$estimate.disp) & !is.na(all_models$estimate.cond),])
+#             ddy=dd$estimate.disp/dd$std.error.disp
+#             ddx=dd$estimate.cond/dd$std.error.cond
+             #lr=loess(ddy~ddx, weights=-log10(dd$p.value.cond)+-log10(dd$p.value.disp))
+#             plot(ddx,ddy)
+             #points(ddx, predict(lr),col='red')
+#             r=residuals(sma(ddy~ddx))
+             #r=(residuals(lr))
+#             fz=fdrtool(r)
+#             dd$resid.p=1.000
+#             dd$resid.fdr=1.000
+#             dd[!is.na(ddy)& !is.na(ddx)]$resid.p= as.vector(fz$pval)
+#             dd[!is.na(ddy)& !is.na(ddx)]$resid.fdr= as.vector(fz$qval)
+
+
         }
     }
 }
