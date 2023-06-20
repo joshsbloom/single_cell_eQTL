@@ -145,7 +145,15 @@ bad.marker.list=lapply(af.results, function(y) {
                      })
 saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
 
-#calculate hmm
+
+bad.marker.list=readRDS(paste0(base.dir, 'results/badMarkerList.RDS'))
+
+
+#run Hmm
+
+#make a summary list of counts of genotype informative variants per cell
+ginf=list()
+
 for(setn in names(sets)){
 
     print(setn)
@@ -171,14 +179,20 @@ for(setn in names(sets)){
         gmap.s=readRDS(paste0(results.dir, 'gmap.RDS'))
         
         g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
-        tmp=as_matrix(g.counts$ref.counts[,-recurring.hets])
+        tmp=as_matrix(g.counts$ref.counts[-recurring.hets,])
         #rsum=Rfast::colsums(tmp)
         #rm(tmp)
-        tmp1=as_matrix(g.counts$alt.counts[,-recurring.hets])
+        tmp1=as_matrix(g.counts$alt.counts[-recurring.hets,])
         asum=Rfast::rowsums(tmp)
         #rm(tmp1)
         tmp2=tmp+tmp1
-        print(colsums(tmp2>0))
+        #genotype informative variants per cell
+        #(colsums(tmp2>0))
+        #diagnostic info for genotype informative sites
+        tmp3=tmp2>0
+        saveRDS(tmp3, file=paste0(results.dir, 'ginformative_sites.RDS'))
+        ginf[[setn]][[ee]]=tmp3
+
         #note recurring.hets contains all flagged markers for removal
         emissionProbs=estimateEmissionProbs(g.counts[[1]],  g.counts[[2]], error.rate=.005,
                                             recurring.het.sites.remove=T,
@@ -186,8 +200,11 @@ for(setn in names(sets)){
         print('calculating genotype probabilities')
         runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='genoprob') #, n.indiv=1000)
         print('calculating viterbi path')
-        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
-}
+    #        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
+    }
 
 }
- 
+ginf=lapply(ginf, function(x) as(do.call('cbind', x), 'sparseMatrix'))
+saveRDS(ginf, file=paste0(base.dir, 'results/combined/ginformative.RDS'))
+ginf=readRDS(file=paste0(base.dir, 'results/combined/ginformative.RDS'))
+lapply(ginf, function(x) median(colSums(x)))

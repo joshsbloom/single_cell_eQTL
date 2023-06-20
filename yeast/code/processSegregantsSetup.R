@@ -20,7 +20,8 @@ library(MASS)
 library(irlba)
 library(nebula)
 library(dplyr)
-
+library(caret)
+library(spaMM)
 # for parallelizing the HMM
 ncores=16
 registerDoMC(cores=ncores)

@@ -41,8 +41,22 @@
                     ))                    
  
  }
-
  dobGLMM=function(comb.out.dir, data, Yr) {
+        bGLMMs=list()
+ #check out 2753
+ #check out 3121
+ #check out 3724
+ #check out 4110
+        for(i in 1:ncol(Yr)){
+           print(i)
+           tryCatch({
+           bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
+           },error=function(e) { next;
+       }
+       saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
+}        
+
+dobGLMMtesting=function(comb.out.dir, data, Yr) {
         bGLMMs=list()
   
          for(i in 1:ncol(Yr)){
@@ -50,6 +64,45 @@
             bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
         }
         saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
+        
+
+    sus=sort(unique(best_match_seg))
+    A=tcrossprod(scale(t(sprevG[,sus])))/nrow(sprevG)
+    A2=data.matrix(nearPD(A,corr=T)$mat)
+    A2.inv=solve(A2)
+
+    data2=data
+
+    bGLMMsA=list()
+    for( i in sigY ){
+    #f= #Poisson(link="log"))
+        print(colnames(Yr)[i])
+        bGLMMsA[[colnames(Yr)[i]]]=
+
+            system.time({aa=spaMM::fitme(Yr[,i]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='REML', data=data2, family=negbin2)})
+            system.time({bb=spaMM::fitme(Yr[,i]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2)})
+            system.time({bb=spaMM::fitme(Yr[,i]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), data=data2, family=negbin2)})
+            
+            system.time({cc=spaMM::fitme(Yr[,i]~offset(l_ctot)+expt+(1|Zid)+(1|Cid), method='REML', data=data2, family=negbin2)})
+            system.time({ff=spaMM::fitme(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), method='PQL', data=data2, family=negbin2)})
+            system.time({ff=spaMM::fitme(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), method='REML', data=data2, family=negbin2, nb_cores=72)})
+            system.time({cc=spaMM::corrHLfit(Yr[,i]~l_ctot+expt+corrFamily(1|Zid)+corrFamily(1|Cid), data=data2, family=negbin2)})
+
+            system.time({cc=spaMM::fitme(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), method='ML',  data=data2, family=negbin2)})
+            system.time({dd=spaMM::fitme(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), method='REML', data=data2, family=negbin2)})
+            system.time({ee=glmmTMB(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), family=nbinom2, data=data2, REML=T, control=glmmTMBControl(parallel=36))})
+            system.time({gg=vglmer(Yr[,i]~l_ctot+expt+(1|Zid)+(1|Cid), family=negbin, data=data2)}) #, REML=T, control=glmmTMBControl(parallel=36))})
+            
+            VarCorr(ee)$cond$Zid[1]
+            VarCorr(ee)$cond$Cid[1]
+
+
+    
+            print(bGLMMsA[[colnames(Yr)[i]]])
+
+
+    }
+
  }
 
 
@@ -106,38 +159,53 @@ calcICCPrevSegs=function(comb.out.dir, Yr) {
     }
     scVCmodels=data.frame(gene=names(llikF),llikF=llikF, llikmZ=llikmZ, llikmC=llikmC)
     saveRDS(scVCmodels, file=paste0(comb.out.dir, 'scVCmodels.RDS'))
+    
+    scVCmodels=readRDS(paste0(comb.out.dir, 'scVCmodels.RDS'))
 
-    #table of ICC results 
-    ssH2=matrix(0,ncol(Yr),7)
-    for( i in 1:ncol(Yr)) {    
+    #table of ICC results #check out 2753
+ #check out 3121
+ #check out 3724
+ #check out 4110
+
+    ssH2=matrix(NA,length(bGLMMs),10)
+    for( i in 1:length(bGLMMs) ) { #ncol(Yr)) { #[-c(2753,3121,3724,4110)]) {    
     #x=bGLMMs[[500]]
     #performance::icc(x)
+        print(i)
         x=bGLMMs[[i]]
         lmbda=mean(exp((predict(x))))
+        #print(lmbda)
         sgma=sigma(x)
+        ssH2[i,8]=sgma
+        ssH2[i,9]=lmbda
+        ssH2[i,10]=mean(x$frame[[1]])
         sA=as.numeric(VarCorr(x)$cond$Zid[1]) #VarCorr(x)$cond$Zid[1]
         sC=as.numeric(VarCorr(x)$cond$Cid[1]) #VarCorr(x)$cond$Cid[1]
         ssH2[i,1]=sC/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
         ssH2[i,2]=sA/(sA+sC+log(1+(1/lmbda)+(1/sgma)))
         ssH2[i,3]=sC
         ssH2[i,4]=sA
+
+     
     #    trigamma(1/((1/lmbda)+(1/sgma)))
     }
-    rownames(ssH2)=colnames(Yr)
+    rownames(ssH2)=names(bGLMMs) #colnames(Yr)
     #ssH2[is.na(llikF),]=NA
 
-    ssH2[,5]=p.adjust(pchisq(-2*(llikmC-llikF),1,lower.tail=F),method='fdr')
-    ssH2[,6]=p.adjust(pchisq(-2*(llikmZ-llikF),1, lower.tail=F), method='fdr')
-    ssH2[,7]=tot.umis=apply(Yr,2,sum,na.rm=T)
-    colnames(ssH2)=c('ICC.cc', 'ICC.H2', 'ccVar', 'H2Var', 'CC.q', 'H2.q', 'tot.umis')
-    saveRDS(ssH2, file=paste0(comb.out.dir, 'scICC.RDS'))
+    ssH2[,5]=p.adjust(pchisq(-2*(scVCmodels[names(bGLMMs),]$llikmC-scVCmodels[names(bGLMMs),]$llikF),1,lower.tail=F),method='fdr')
+    ssH2[,6]=p.adjust(pchisq(-2*(scVCmodels[names(bGLMMs),]$llikmZ-scVCmodels[names(bGLMMs),]$llikF),1, lower.tail=F), method='fdr')
+    ssH2[,7]=tot.umis=apply(Yr[,names(bGLMMs)],2,sum,na.rm=T)
+    colnames(ssH2)=c('ICC.cc', 'ICC.H2', 'ccVar', 'H2Var', 'CC.q', 'H2.q', 'tot.umis', 'sigma', 'lambda', 'mean_obs')
+    saveRDS(ssH2, file=paste0(comb.out.dir, 'scICC_2.RDS'))
     return(ssH2)
 }
 
 
 #take subset of genes, take previous lookup genotypes, and fit narrow-sense heritability
 calcICCPrevSegs_3VC=function(comb.out.dir , Yr,sigY, best_match_seg, sprevG, data) {
-                      
+       
+    #comb.out.dir='/data/single_cell_eQTL/yeast/results/combined/Ap/'               
+    
     sus=sort(unique(best_match_seg))
     A=tcrossprod(scale(t(sprevG[,sus])))/nrow(sprevG)
     A2=data.matrix(nearPD(A,corr=T)$mat)
@@ -154,17 +222,32 @@ calcICCPrevSegs_3VC=function(comb.out.dir , Yr,sigY, best_match_seg, sprevG, dat
     }
     saveRDS(bGLMMsA, file=paste0(comb.out.dir, 'bGLMMsA.RDS'))
 
-
+    #new code to extract dispersion estimates
+    xab=rep(NA,length(bGLMMsA))
+    for( i in 1:length(xab) ){
+        test=bGLMMsA[[i]]
+        #jfc, there must be a better way to extract this 
+        a=capture.output(summary(test))[5]
+        xab[i]=as.numeric(gsub(".*shape=(.*)\\)\\( link.*", "\\1", a))
+        print(xab[i])
+    }
+    names(xab)=names(bGLMMsA)
+    saveRDS(xab, file=paste0(comb.out.dir, 'bGLMMsA_theta.RDS'))
     #system.time({f2=fitme(Yr[,3]~l_ctot+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='REML', data=data2, family=negbin2) })
 
+    xab=readRDS(paste0(comb.out.dir, 'bGLMMsA_theta.RDS'))
     # code to process results of repeated measures mixed model with additional random additive effect  of genome
     bGLMMsA=readRDS(paste0(comb.out.dir, 'bGLMMsA.RDS'))
+
     ssH2a=matrix(0,length(bGLMMsA),6)
     #system.time({f3=fitme(Yr[,3]~offset(l_ctot)+expt+corrMatrix(1|Zid)+(1|Zid)+(1|Cid), covStruct=list(precision=A2.inv), method='PQL', data=data2, family=negbin2) })
     for( i in 1:length(bGLMMsA)) {    
         f3=bGLMMsA[[i]]
         lmbda=mean(exp(predict(f3)))
-        sgma=sigma(f3)
+        #sigma for spaMM object isn't the dispersion estimate ... confusingly
+        #sgma=sigma(f3)
+        sgma= xab[names(bGLMMsA)[i]]
+        #sgma=
         sA=VarCorr(f3)[1,3]
         sR=VarCorr(f3)[2,3]
         sC=VarCorr(f3)[3,3]
