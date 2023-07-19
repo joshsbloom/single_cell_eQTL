@@ -22,6 +22,7 @@ library(nebula)
 library(dplyr)
 library(caret)
 library(spaMM)
+library(abind)
 # for parallelizing the HMM
 ncores=16
 registerDoMC(cores=ncores)
@@ -505,6 +506,38 @@ getMeff_Li_and_Ji=function(cor.mat) {
     Meff.li=sum(intevals,nonintevals)
     print(Meff.li)
     return(Meff.li)
+}
+
+hamming=function(X) { 
+        D = (1-X) %*% t(X) 
+        D + t(D)
+    }
+
+#return cell barcodes for cell with highest umi of set of cells with presumably matching genotypes
+subset.best.unique=function(vg, counts, match.thresh=.8) {
+    vg.cut=(vg>.5)+0
+    hvg=hamming(vg.cut)
+    mstat=1-(hvg/ncol(vg))
+    mstat2=mstat
+   
+    #diag(mstat2)=0
+    mstat2[upper.tri(mstat2)]=0
+
+    numi.temp=colSums(counts)
+
+    mstat3=mstat2
+    mstat3[mstat3<=match.thresh]=0
+    for(i in 1:ncol(mstat2)){
+      #  print(i)
+       matches=which(mstat3[,i]>match.thresh)
+       best=matches[which.max(numi.temp[matches])]
+        # zero out the remaining
+       zind=matches[!matches %in% best]
+       mstat3[zind,]=0
+       mstat3[,zind]=0
+
+    }
+    return(colnames(mstat3)[colSums(mstat3)>0])
 }
 
 
