@@ -37,7 +37,8 @@
         return(list(best_match_seg=best_match_seg,
                     gdataPrev=gdataPrev,
                     sprevG=sprevG,
-                    markerGRr2=markerGRr2
+                    markerGRr2=markerGRr2,
+                    vg=vg2
                     ))                    
  
  }
@@ -51,8 +52,9 @@
            print(i)
            tryCatch({
            bGLMMs[[colnames(Yr)[i]]]=glmmTMB(Yr[,i]~l_ctot+expt+(1|Cid)+(1|Zid), family=nbinom2, data=data, control=glmmTMBControl(parallel=36))
-           },error=function(e) { next;
-       }
+           },error=function(e) { next;   })
+        }
+        
        saveRDS(bGLMMs, file=paste0(comb.out.dir, 'bGLMMs.RDS'))
 }        
 

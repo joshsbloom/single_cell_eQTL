@@ -537,9 +537,26 @@ subset.best.unique=function(vg, counts, match.thresh=.8) {
        mstat3[,zind]=0
 
     }
-    return(colnames(mstat3)[colSums(mstat3)>0])
+#use indices here not cell barcodes 
+    return(which(colSums(mstat3)>0) ) #colnames(mstat3)[colSums(mstat3)>0])
 }
 
+
+count.non.unique=function(vg, match.thresh=.8) {
+    vg.cut=(vg>.5)+0
+    hvg=hamming(vg.cut)
+    mstat=1-(hvg/ncol(vg))
+    mstat2=mstat
+   
+    #diag(mstat2)=0
+    mstat2[upper.tri(mstat2)]=0
+    diag(mstat2)=0
+    sm=which(mstat2>match.thresh, arr.ind=T)
+
+    um=length(unique(c(sm[,1], sm[,2])))
+
+    print(um/nrow(vg))
+}
 
        
 chroms=paste0('chr', as.roman(1:16)) 
