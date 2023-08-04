@@ -66,8 +66,10 @@ getGenoInformativeCounts=function(data.dir, cranger.dir,gmap,parents,log2diff=3)
     p2=p2[rownames(ref.counts),]
 
     # double check this 
-    p1[which(multivar),]=0
-    p2[which(multivar),]=0
+    if(sum(multivar)>0) {
+        p1[which(multivar),]=0
+        p2[which(multivar),]=0
+    }
     #ref.counts
     #nn=2761 #2993 #4173
     #plot(p1[,nn], ylim=c(-10,10), type='h')
@@ -79,7 +81,12 @@ getGenoInformativeCounts=function(data.dir, cranger.dir,gmap,parents,log2diff=3)
     #distortions could be AF/ASE/false positive variants/
     distorted=cbind(log2(rowSums(ref.counts)+1), log2(rowSums(alt.counts)+1))
     filter.distorted=(abs(distorted[,1]-distorted[,2])>log2diff)
+
+    x11()
+    par(mfrow=c(2,1))
     plot(distorted[,1], distorted[,2], col=1+filter.distorted, sub=sum(filter.distorted)/nrow(distorted))
+    plot(rowSums(ref.counts)/rowSums(ref.counts+alt.counts), col=filter.distorted+1)
+    
     # I think we can afford to be aggressive with filtering here 
     
     ref.counts[which(filter.distorted),]=0

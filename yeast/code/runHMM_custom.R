@@ -1,4 +1,6 @@
- runHMM=function(pRR, pAA, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.indiv=NULL, sex.chr.model=F,lik=F,ncores=64) {
+ 
+#https://genome.sph.umich.edu/w/images/7/76/666.18.pdf
+runHMM=function(pRR, pAA, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.indiv=NULL, sex.chr.model=F,lik=F,ncores=64, return.chr=F) {
     #attach(emissionProbs)
     #pRR
     #pHet
@@ -109,7 +111,7 @@
                                    dimnames=list(id=cell.names[1:n.indiv],
                                                  geno=c('A','B'),
                                                  markers=names(gdist))   )
-
+            if(lik) {return(do.call('c', pp)) }
             if(sex.chr) {posteriorProb=posteriorProb[,-2,] }
 
             # and then fill it up manually with a loop
@@ -117,6 +119,7 @@
                 #print(n)
                 posteriorProb[rownames(pp[[n]]),,]=pp[[n]]
             }
+            if(return.chr) {return(posteriorProb) }
             saveRDS(posteriorProb, file=paste0(hmm.out.dir, coii,'.RDS'))
         }
         if(calc=='viterbi') {
@@ -124,10 +127,10 @@
                                   dimnames=list(id=cell.names[1:n.indiv],
                                                 markers=names(gdist)) ) 
          for(n in 1:length(pp)) {
-                print(n)
+                #print(n)
                 viterbiOut[rownames(pp[[n]]),]=pp[[n]]
             }
-
+            if(return.chr) {return(viterbiOut) }
             saveRDS(viterbiOut, file=paste0(hmm.out.dir, coii,'_viterbi.RDS'))
         }
        # return(NULL)

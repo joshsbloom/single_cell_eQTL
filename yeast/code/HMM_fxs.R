@@ -47,6 +47,9 @@ calcForward=function(eMats, tMats, lik=F) {
     #print(logsumTot)
     return(f)
 }
+calcForward=compiler::cmpfun(calcForward)
+
+
 # backward algorithm
 calcBackward=function(eMats, tMats) {
     emissionProbs=eMats
@@ -76,6 +79,7 @@ calcBackward=function(eMats, tMats) {
     }
     return(b)
 }
+calcBackward=compiler::cmpfun(calcBackward)
 
 #viterbi path
 viterbi=function (eMats, tMats) {
@@ -119,7 +123,7 @@ viterbi=function (eMats, tMats) {
     }
     return(viterbiPath)
 }
-
+viterbi=compiler::cmpfun(viterbi)
 
 #calculate posterior probabilities
 calcPosterior=function(f,b) {
@@ -135,5 +139,5 @@ calcPosterior=function(f,b) {
     posteriorProb = exp((f + b) - probObservations)
     return(posteriorProb)
 }
-
+calcPosterior=compiler::cmpfun(calcPosterior)
 
