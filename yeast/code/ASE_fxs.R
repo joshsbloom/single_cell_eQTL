@@ -575,6 +575,11 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
 
  nbin.model.results$dispLRTp=pchisq(-2*( nbin.model.results$logLik.red- nbin.model.results$logLik),1,lower.tail=F)
 
+
+ attr(nbin.model.results, 'gm')=rbindlist(sapply(nbin, function(x) (x$emm.m)),idcol='gene')
+ attr(nbin.model.results, 'gd')=rbindlist(sapply(nbin, function(x) (x$emm.d)),idcol='gene')
+
+
  return(nbin.model.results)
 }
 
