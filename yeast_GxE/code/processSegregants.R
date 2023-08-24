@@ -1,7 +1,8 @@
 #define a bunch of useful functions and experiment specific variables
 source('/data/single_cell_eQTL/yeast/code/processSegregantsSetup.R')
 
-source('/data/single_cell_eQTL/yeast/code/processSegregantsGlobalVars.R')
+#define a bunch of global variables and load (this file we'll need to modify for the different projects
+source('/data/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
 
 #load some additional functions for processing the experiment with previously genotyped segregants
 source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
@@ -9,6 +10,8 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 #run HMM and organize data per experiment
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
+
+state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'
 
 #combine information from multiple batches for different segregant panels 
 for(set in names(sets)){
@@ -105,8 +108,8 @@ for(set in names(sets)){
         counts=counts[,classifier.name2]
         vg=vg[classifier.name2,]
 
-        cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
-        cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
+        cc.big.table=readr::read_delim(state.annot.file, delim='\t')
+        cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle!='MATALPHA', cell_cycle != "HAPLOIDS" & named_dataset == experiment )
         cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
         cc.df=cc.df[cc.df$cell_name %in% rownames(vg),]
 
@@ -129,15 +132,16 @@ for(set in names(sets)){
         #rbind(exp.results[[as.character(set.3004[1])]]$cell.cycle,exp.results[[as.character(set.3004[2])]]$cell.cycle)
 
 
-    count.non.unique(vg)
+    #count.non.unique(vg)
 
     #subset to unique genotypes for cross 3004
-    if(set=='3004') {
+    #if(set=='3004') {
         bsub=subset.best.unique(vg,counts)
+        print(length(bsub))
         vg=vg[bsub,]
         counts=counts[,bsub]
         cc.df=cc.df[bsub,]
-    }
+    #}
 
     pruned=LDprune(vg, m.granges)
     Gsub=pruned$Gsub
@@ -152,16 +156,27 @@ for(set in names(sets)){
     Yr=t(counts[expressed.transcripts,])
     transcript.features=data.frame(gene=colnames(Yr), non.zero.cells=colSums(Yr>1), tot.expression=colSums(Yr))
 
-    #cisMarkers=cisMarkers[cisMarkers$transcript %in% expressed.transcripts,]
+   # cisMarkers=cisMarkers[cisMarkers$transcript %in% expressed.transcripts,]
     #if no subsetting this is not necessary
-    #cMsubset=cisMarkers[which(cisMarkers$transcript %in% colnames(Yr)),]
+  #  cMsubset=cisMarkers[which(cisMarkers$transcript %in% colnames(Yr)),]
 
     barcode.features=data.frame(barcode=colnames(counts), nUMI=colSums(counts))
 
     #replace log(counts)
-    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
-    colnames(mmp1)[3]='experiment'
-    
+
+    #given more than one experiment 
+    #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    #colnames(mmp1)[3]='experiment'
+    if( length(unique(cc.df$named_dataset)) ==1) {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) 
+    } else {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+        colnames(mmp1)[3]='experiment'
+    }
+
+    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) #+cc.df$named_dataset))
+#    colnames(mmp1)[3]='experiment'
+
     print("calculating dispersions")
 
     # custom code for repeated measures mixed models
@@ -292,9 +307,12 @@ for(set in names(sets)){
     names(thetas)=dispersion.df$gene
     
     cc.df=segDataList$cell.cycle.df
-
-    mmp0=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
-    colnames(mmp0)[3]='experiment'
+    if( length(unique(cc.df$named_dataset)) ==1) {
+        mmp0=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) 
+    } else {
+        mmp0=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+        colnames(mmp0)[3]='experiment'
+    }
 
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
     cnv=colnames(cc.matrix.manual)
@@ -339,7 +357,14 @@ for(set in names(sets)){
         LODpL=list()
         for(i in 1:nperm) { 
             print(i)
-            new.index=as.vector(do.call('c', sapply(split(seq_along(mmp1[,'experiment']), as.character(mmp1[,'experiment'])), sample)))
+            #one experiment
+            if('experiment' %in% names(mmp1)) {
+                    new.index=as.vector(do.call('c', sapply(split(seq_along(mmp1[,'experiment']), as.character(mmp1[,'experiment'])), sample)))
+            } else {
+                    new.index=sample(seq_along(mmp1[,1]))
+            }
+            #multi experiments
+            #          
             Ykp=Matrix(Yr[new.index,], sparse=T)
             mmp2=mmp1
             mmp2[,2]=mmp1[new.index,2]

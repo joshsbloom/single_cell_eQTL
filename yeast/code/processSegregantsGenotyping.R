@@ -199,7 +199,7 @@ for(setn in names(sets)){
                                             recurring.hets=recurring.hets)
         print('calculating genotype probabilities')
         runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='genoprob') #, n.indiv=1000)
-        print('calculating viterbi path')
+     #   print('calculating viterbi path')
     #        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
     }
 
