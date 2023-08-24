@@ -5,7 +5,7 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsSetup.R')
 source('/data/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
 
 #load some additional functions for processing the experiment with previously genotyped segregants
-source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
+#source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 
 #run HMM and organize data per experiment
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
@@ -134,8 +134,7 @@ for(set in names(sets)){
 
     #count.non.unique(vg)
 
-    #subset to unique genotypes for cross 3004
-    #if(set=='3004') {
+    #always run filtering of non-unique for now
         bsub=subset.best.unique(vg,counts)
         print(length(bsub))
         vg=vg[bsub,]
@@ -181,45 +180,7 @@ for(set in names(sets)){
 
     # custom code for repeated measures mixed models
 
-    if( set == 'Ap') { 
-    #if(experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
-       
-        segMatch.list=getSegMatch(comb.out.dir, vg, m.granges)
-        saveRDS(segMatch.list, file=paste0(comb.out.dir, 'segMatchList.RDS'))
-
-        best_match_seg=segMatch.list$best_match_seg
-        gdataPrev=segMatch.list$gdataPrev
-        sprevG=segMatch.list$sprevG
-        markerGRr2=segMatch.list$markerGRr2
-        rm(segMatch.list)
-
-        #run negative binomial mixed model with cell cycle and heritability terms    
-        data=data.frame(l_ctot=mmp1[,2], expt=mmp1[,3], Zid=best_match_seg, Cid=cc.df$cell_cycle)
-        saveRDS(data, file=paste0(comb.out.dir, 'bGLMM_setup.RDS'))
-
-        #run neg bin mixed model with strain and cell-cycle effects
-        dobGLMM(comb.out.dir, data, Yr)
-
-        #additional narrow-sense model for when we have lookup genotypes
-        # fit drop1 for each of the random effects in bGLMMs (segregant and cell-cycle), extract VC estimatest, and calc ICCs
-        ssH2=calcICCPrevSegs(comb.out.dir, Yr)
-
-        sigY=(which(ssH2[,'H2.q']<.1))
-
-        #fit model with effects of cell-cycle, segregant, and additive effect of all markers
-        ssH2a=calcICCPrevSegs_3VC(comb.out.dir ,  Yr,sigY, best_match_seg, sprevG, data) 
-
-
-            
-      df=data.frame(id=factor(best_match_seg))
-      mmp2=mmp1[order(df$id),]
-      countmat=counts[expressed.transcripts,order(df$id)]
-      df.id=df[order(df$id),]
-      nullNB=nebula(count=countmat, id=df.id, pred=mmp2) 
-    
-    } else {
-           nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
-    }
+    nullNB=nebula(counts[expressed.transcripts,], mmp1[,1], pred=mmp1)
     
 
     dispersion.df=data.frame(gene=nullNB$summary$gene, theta.null=1/nullNB$overdispersion[,2])
@@ -229,16 +190,9 @@ for(set in names(sets)){
     cSplit=split(cisMarkers, cisMarkers$marker)
 
 
-    if( set == 'Ap') { #experiment=="00_BYxRM_480MatA_1" | experiment == "00_BYxRM_480MatA_2") {
-        pGenoCis=doLocalTestPrevGeno(sgd.genes, markerGRr2, Yr, dispersion.df, Gsub, gdataPrev, comb.out.dir, cl)
-        clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","best_match_seg","doCisNebula3"))  #, "nebula"))
-        system.time({   cisNB=parLapply(cl, cSplit, doCisNebula3)})
+   clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
+   system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
 
-
-    } else {
-             clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
-             system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
-    }
     names(cisNB)=names(cSplit)
     saveRDS(cisNB, file=paste0(comb.out.dir, 'cisNB2.RDS'))
       
@@ -270,23 +224,6 @@ for(set in names(sets)){
     rm(exp.results)
     saveRDS(segDataList, file=paste0(comb.out.dir, 'segData.RDS'))
 
-    if(set == 'Ap') {
-
-        #combare local-eQTL betas with lookup and HMM genotypes  -------------------------------
-        cisNB=readRDS(paste0(comb.out.dir, 'cisNB2.RDS'))
-        cis.ps=as.vector(unlist(sapply(cisNB, function(x) x$summary$p_)))
-        cis.beta=as.vector(unlist(sapply(cisNB, function(x) x$summary$logFC_)))
-        cis.gene=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
-        nGenoCis=data.frame(gene=cis.gene, beta=cis.beta, p=cis.ps)
-        nGenoCis=nGenoCis[nGenoCis$gene %in% pGenoCis$gene,]
-    
-        geno_cis_comp=list(prevGenoCis=pGenoCis,
-             hmmGenoCis=nGenoCis)
-        saveRDS(geno_cis_comp, file=paste0(paste0(comb.out.dir, 'geno_cis_comp.RDS')))
-        #----------------------------------------------------------------------------------------
-
-       
-          }
 }
 
 
