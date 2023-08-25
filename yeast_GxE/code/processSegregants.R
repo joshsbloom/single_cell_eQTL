@@ -1,11 +1,8 @@
-#define a bunch of useful functions and experiment specific variables
-source('/data/single_cell_eQTL/yeast/code/processSegregantsSetup.R')
-
 #define a bunch of global variables and load (this file we'll need to modify for the different projects
 source('/data/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
 
 #load some additional functions for processing the experiment with previously genotyped segregants
-#source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
+source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 
 #run HMM and organize data per experiment
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
@@ -141,11 +138,19 @@ for(set in names(sets)){
         counts=counts[,bsub]
         cc.df=cc.df[bsub,]
     #}
+    #get a pre-defined set of markers to use across environments ... write code to automate this step, this choice, and structures to handle reps
+    if(merged==F) {    
+    ### for merged analysis 
+        pruned=LDprune(vg, m.granges)
+        Gsub=pruned$Gsub
+        markerGRr=pruned$markerGRr
+    }else {
+        markerGRr=readRDS('/data/single_cell_eQTL/yeast_GxE/results/combined/A_NaCl_p7M/markerGRr.RDS')
+        Gsub=vg[,markerGRr$sname]
+    }
+    #--------------------------
 
-    pruned=LDprune(vg, m.granges)
-    Gsub=pruned$Gsub
-    markerGRr=pruned$markerGRr
-  
+
   #  rm(pruned)
 
     infoCells=rowSums(counts>0)
@@ -190,8 +195,8 @@ for(set in names(sets)){
     cSplit=split(cisMarkers, cisMarkers$marker)
 
 
-   clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
-   system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
+    clusterExport(cl, varlist=c("mmp1", "Gsub", "counts","doCisNebula2"))  #, "nebula"))
+    system.time({   cisNB=parLapply(cl, cSplit, doCisNebula2)})
 
     names(cisNB)=names(cSplit)
     saveRDS(cisNB, file=paste0(comb.out.dir, 'cisNB2.RDS'))

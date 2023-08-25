@@ -1,6 +1,4 @@
 # for parallelizing the HMM
-ncores=16
-registerDoMC(cores=ncores)
 
 #base code directory for additional necessary functions
 code.dir='/data/single_cell_eQTL/yeast/code/'
@@ -14,6 +12,11 @@ source(paste0(code.dir, 'runHMM_custom.R'))
 source(paste0(code.dir, 'ASE_fxs.R'))
 
 
+source(paste0(code.dir, 'processSegregantsSetup.R'))
+
+
+ncores=16
+registerDoMC(cores=ncores)
 
 # set some variables---------------------------------------------------------
 chroms=paste0('chr', as.roman(1:16)) 
@@ -140,9 +143,12 @@ nperm=5
 #good YPSxYJM was 11 and 12
 #7,8,
 
+#each separate
 sets=list('A_NaCl_p7M_t0'=c(1),
           'A_NaCl_p7M_t30'=c(2))
-          
+
+#together
+#sets=list('A_NaCl_p7M'=c(1,2))        
 #sets=list(
 #    '3004'=c(9,10),
 #    'A'=c(3,4),
@@ -153,5 +159,4 @@ sets=list('A_NaCl_p7M_t0'=c(1),
 #          'Ap'=c(5,6)
 #          )
 cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
-
 
