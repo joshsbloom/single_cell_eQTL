@@ -364,8 +364,15 @@ for(set in names(sets)){
   
     markerGR=getMarkerGRanges(list(t(Gsub)))
 
-    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
-    colnames(mmp1)[3]='experiment'
+    if( length(unique(cc.df$named_dataset)) ==1) {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) 
+    } else {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+        colnames(mmp1)[3]='experiment'
+    }
+
+    #mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+    #colnames(mmp1)[3]='experiment'
 
    # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
@@ -481,24 +488,6 @@ for(set in names(sets)){
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # summary of QTL detected at different FDR thresholds 
 for(set in names(sets)){
     print(set)
@@ -533,9 +522,13 @@ for(set in names(sets)){
     names(thetas)=dispersion.df$gene
     
     cc.df=segDataList$cell.cycle.df
-
-    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
-    colnames(mmp1)[3]='experiment'
+    
+    if( length(unique(cc.df$named_dataset)) ==1) {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) 
+    } else {
+        mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI)+cc.df$named_dataset))
+        colnames(mmp0)[3]='experiment'
+    }
 
    # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
@@ -562,7 +555,7 @@ for(set in names(sets)){
         
     #qchisq(2*(.05/meff),1,lower.tail=F)/(2*log(10))
 
-    saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
+    #saveRDS(LOD, file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
 
     Betas=do.call('rbind', lapply(bunchoflists,function(x)x$Betas))
     rownames(Betas)=rownames(LOD) #colnames(cc.incidence)
@@ -577,8 +570,23 @@ for(set in names(sets)){
     for(i in 1:nrow(LOD)){
         plot(LOD[i,],main=rownames(LOD)[i], ylab='LOD', xlab='marker index')
         abline(v=cumsum(c(0,rle(tstrsplit(colnames(Gsub), '_')[[1]])$lengths)), lty=2, col='blue')
+        readline()
     }
     dev.off()
+
+    nphenos=c('rp.aucell', 'iesr.aucell', 'ribi.aucell') 
+    new.phenos=cc.df[,nphenos] #cbind(cc.df$rp.aucell, cc.df$iesr.aucell,  cc.df$ribi.aucell)
+    new.phenos.scaled=scale(new.phenos)
+    npLODs=fasterLOD(nrow(cc.df), new.phenos.scaled, Gsub.s, betas=T)
+    rownames(npLODs$r)=rownames(npLODs$LOD)=nphenos
+
+    npLODpeaks=list()
+    for(n in nphenos){
+        print(n)
+        npLODpeaks[[n]]=doTraitFDR(new.phenos.scaled[,n], Gsub.s, Gsub, doLODdrop=T)
+    }
+    saveRDS(npLODs, file=paste0(comb.out.dir, 'state_pheno_LODs.RDS'))
+    saveRDS(npLODpeaks, file=paste0(comb.out.dir, 'state_pheno_LOD_peaks.RDS'))
 }
 
 
@@ -612,6 +620,21 @@ for(set in names(sets)){
 
 #get significant hotspot bins and test for trans-eQTL x CC interactions 
 source('/data/single_cell_eQTL/yeast/code/processSegregantsHotspots.R')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
