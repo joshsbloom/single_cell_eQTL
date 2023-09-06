@@ -9,7 +9,15 @@ for(set in names(sets)){
 
     markerGR=getMarkerGRanges(list(t(Gsub)))
 
+    #to deal with differing # of cell cycle categories
+    #clean this up
+    cc.df=segDataList$cell.cycle.df
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cnv=colnames(cc.matrix.manual)
+    cnn=gsub('/',':', cnv)
+    cycle.cats=gsub('cell_cycle', '', cnn)
 
+    
     cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
     cmin[!is.na(cmin)]=0
     cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
@@ -49,6 +57,7 @@ for(set in names(sets)){
          #    cPf=GP[GP$LOD>4 & GP$chr!=GP$tchr,]
          cPf=GP[GP$FDR<.05 & GP$chr!=GP$tchr,]
 
+         if(nrow(cPf)>0){
          bin.table=makeBinTable(cPf, cbin50k)
          cPf=getBinAssignment(cPf, cbin50k)
          sig.hp=qpois(1-(.05/length(bin.table$pos)),ceiling(mean(bin.table$count)))+1
@@ -58,17 +67,37 @@ for(set in names(sets)){
 
          hlist[[cc]]=plotHotspot2(bin.table, titleme=cc)
          plist[[cc]]=cPf
+         }
      }
-    
-    ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
+
+    if(length(hlist)==3){
+        ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]],ncol=1)
+    }
+    if(length(hlist)==4){
+        ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]],ncol=1)
+    }
+    if(length(hlist)==5) {
+        ggpubr::ggarrange(cH, hlist[[1]], hlist[[2]], hlist[[3]], hlist[[4]], hlist[[5]],ncol=1)
+    }
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_hotspots.png'), width=8, height=13)
     saveRDS(plist, file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))
     hotspotList[[set]]=plist
 }
 
+
 for(set in names(sets)){
     print(set)
-   comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    segDataList=readRDS(paste0(comb.out.dir, 'segData.RDS'))
+    #to deal with differing # of cell cycle categories
+    cc.df=segDataList$cell.cycle.df
+    
+    #clean this up, make this dynamic for diff cell cycle cats
+    cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
+    cnv=colnames(cc.matrix.manual)
+    cnn=gsub('/',':', cnv)
+    cycle.cats=gsub('cell_cycle', '', cnn)
+
     tTL=data.frame(readRDS(file=paste0(comb.out.dir,'/hotspot_peaks.RDS'))$combined)
     ucontrasts=combn(cycle.cats,2)
     ucontrastsB=matrix(gsub(':', '.', paste0('Beta_', ucontrasts)), nrow=2)

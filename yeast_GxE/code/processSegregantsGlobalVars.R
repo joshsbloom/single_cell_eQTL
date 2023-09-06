@@ -103,12 +103,15 @@ cranger.dir='filtered_feature_bc_matrix/'
 #           '22_3004_20k_May10'= 2^6.7
 #)
 
-cList=list(
-           'NaCl_0.7M_t0_3051_rep1'='A',
-           'NaCl_0.7M_t30_3051_rep1'='A')
-hList=list(
-           'NaCl_0.7M_t0_3051_rep1'=2^5,
-           'NaCl_0.7M_t30_3051_rep1'=2^5 )
+cList=list('NaCl_0.7M_t0_3051_rep1'='A',
+           'NaCl_0.7M_t30_3051_rep1'='A',
+           'NaCl_0.7M_3004_rep1_t0'='3004',
+           'NaCl_0.7M_3004_rep1_t30'='3004')
+
+hList=list('NaCl_0.7M_t0_3051_rep1'=2^5,
+           'NaCl_0.7M_t30_3051_rep1'=2^5,
+           'NaCl_0.7M_3004_rep1_t0'=2^5,
+           'NaCl_0.7M_3004_rep1_t30'=2^5)
 
 
 
@@ -144,8 +147,13 @@ nperm=5
 #7,8,
 
 #each separate
-sets=list('A_NaCl_p7M_t0'=c(1),
-          'A_NaCl_p7M_t30'=c(2))
+#sets=list('A_NaCl_p7M_t0'=c(1),
+#          'A_NaCl_p7M_t30'=c(2))
+#sets=list('A_NaCl_p7M'=c(1,2))        
+
+#sets=list('3004_NaCl_p7M_t0'=c(1),
+#          '3004_NaCl_p7M_t30'=c(2))
+#sets=list('3004_NaCl_p7M'=c(1,2))        
 
 #together
 #sets=list('A_NaCl_p7M'=c(1,2))        

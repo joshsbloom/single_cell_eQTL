@@ -134,20 +134,19 @@ for(setn in names(sets)){
      af.results[[setn]][[experiment]]=readRDS(file=paste0(results.dir, 'af.RDS'))
      af.results[[setn]][[experiment]]$flagged.marker=af.results[[setn]][[experiment]]$af.folded>.4 & af.results[[setn]][[experiment]]$tcnt>10
     }
+
+
 }
 
-
+for(setn in names(sets)) {
 #assemble bad markers 
-bad.marker.list=lapply(af.results, function(y) { 
-             b=rowSums(sapply(y, function(x) { return(x$recurring.hets | x$flagged.marker) } ) )
-             names(b)=rownames(y[[1]])
-             return(b)
-                     })
-saveRDS(bad.marker.list, file=paste0(base.dir, 'results/badMarkerList.RDS'))
-
-
-bad.marker.list=readRDS(paste0(base.dir, 'results/badMarkerList.RDS'))
-
+        y=af.results[[setn]]
+        b=rowSums(sapply(y, function(x) { return(x$recurring.hets | x$flagged.marker) } ) )
+        names(b)=rownames(y[[1]])
+        bad.marker.list=b
+        comb.out.dir=paste0(base.dir, 'results/combined/', setn, '/')
+        saveRDS(bad.marker.list, file=paste0(comb.out.dir, 'badMarkerList.RDS'))
+}
 
 #run Hmm
 
@@ -162,7 +161,7 @@ for(setn in names(sets)){
     
     exp.results=list()
 
-    recurring.hets=bad.marker.list[[setn]]
+    recurring.hets=readRDS(paste0(comb.out.dir, 'badMarkerList.RDS')) #bad.marker.list[[setn]]
     recurring.hets=recurring.hets>0
 
     # iterate over each experiment -----------------------------------------------
@@ -202,8 +201,9 @@ for(setn in names(sets)){
      #   print('calculating viterbi path')
     #        runHMM(emissionProbs[[1]], emissionProbs[[2]], results.dir,gmap.s, chroms, calc='viterbi') #, n.indiv=1000)
     }
-
+    
 }
+#fix this it'll get overwritten now 
 ginf=lapply(ginf, function(x) as(do.call('cbind', x), 'sparseMatrix'))
 saveRDS(ginf, file=paste0(base.dir, 'results/combined/ginformative.RDS'))
 ginf=readRDS(file=paste0(base.dir, 'results/combined/ginformative.RDS'))

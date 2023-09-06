@@ -4,120 +4,32 @@ source('/data/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
 #load some additional functions for processing the experiment with previously genotyped segregants
 source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 
+#additional code for GxE will go here
+source('/data/single_cell_eQTL/yeast_GxE/code/processSegregants_GxE_fx.R')
+
 #run HMM and organize data per experiment
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
 
-state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'
+#state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'
+#for now it'd be easiest if this file contains all info
+state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3004_rep1.annotations.tsv'
 
-#combine information from multiple batches for different segregant panels 
-for(set in names(sets)){
+#sets=list('3004_NaCl_p7M'=c(3,4))    
+sets=list('3004_NaCl_p7M_t0'=c(3),
+          '3004_NaCl_p7M_t30'=c(4))
+setsMn=list('3004_NaCl_p7M_t0'='3004_NaCl_p7M',
+            '3004_NaCl_p7M_t30'='3004_NaCl_p7M')
+setsM=list('3004_NaCl_p7M'=c(3,4))    
+
+
+#get a pre-defined set of markers to use across environments ... 
+for(set in names(setsM)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     dir.create(comb.out.dir)
-    
-    exp.results=list()
+    exp.results=makeExpResults(base.dir,setsM,experiments,data.dirs, chroms, state.annot.file)
 
-    for( ee in  sets[[set]] ) { 
-        experiment=experiments[ee]
-        print(ee)
-        print(experiment)    
-        #cross=crossL[[cdesig[ee]]]
-        #parents=parentsL[[cdesig[ee]]]
-        data.dir=data.dirs[ee]
-        results.dir=paste0(base.dir, 'results/', experiment, '/')
-
-        #read in transcript counts 
-        counts=readRDS(paste0(results.dir, 'counts.RDS'))
-
-        #read in geno informative counts
-        g.counts=readRDS(paste0(results.dir, 'gcounts.RDS'))
-        classification=readRDS(paste0(results.dir, 'cellFilter.RDS'))
-        het.cells=!classification
-
-          tmp=as_matrix(g.counts$ref.counts[,-het.cells])
-          rsum=Rfast::rowsums(tmp)
-          rm(tmp)
-          tmp=as_matrix(g.counts$alt.counts[,-het.cells])
-          asum=Rfast::rowsums(tmp)
-          rm(tmp)
-          #rsum=apply(g.counts$ref.counts[,-het.cells], 1, sum)
-            #asum=apply(g.counts$alt.counts[,-het.cells],1, sum)
-         af=(rsum/(rsum+asum))
-         names(af)=rownames(g.counts$ref)
-
-        #rsum=apply(g.counts$ref.counts,1, sum)
-        #asum=apply(g.counts$alt.counts,1, sum)
-        #af=(rsum/(rsum+asum))
-        #af[(rsum+asum)<10]=NA
-        af=data.frame(chr=tstrsplit(names(af), '_')[[1]], pos=as.numeric(tstrsplit(names(af), '_')[[2]]), 
-                      rsum=rsum, asum=asum, tcnt=rsum+asum, af=af)
-        af$chr=factor(af$chr, levels=paste0('chr', as.roman(1:16)))
-
-        af%>%filter(tcnt>10) %>% ggplot(aes(x=pos,y=af,color=log2(tcnt))) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
-            geom_point() + 
-            scale_colour_viridis_c()+
-            xlab('')+ylab('')+ scale_alpha(guide = 'none') + 
-            facet_grid(~chr,scales="free", space="free")+        #scale_x_discrete(guide = guide_axis(n.dodge = 2))+
-            theme_classic()+
-            theme(axis.text.x.bottom = element_text(angle = 45,hjust=1))+
-            theme(panel.spacing=unit(0, "lines"))+
-            ggtitle(experiment)
-        ggsave(paste0(results.dir, 'seg_af.png'), width=22, height=5)
-        
-        # read in genetic map and format for plotting
-        # gmapC=rbindlist(readRDS(paste0(results.dir, 'gmap.RDS')))
-        # gmap.subset=gmapC[match(rownames(g.counts[[1]]), paste0(gmapC$chrom, '_', gmapC$ppos)),]
-        # gmap.ss=split(gmap.subset, gmap.subset$chrom) 
-       
-        #get hmm genotype probs 
-        vg=getSavedGenos(chroms, results.dir, type='genoprobs')
-        m.granges=getMarkerGRanges(g.counts)
-        m.granges$gcoord=gcoord.key[as.character(seqnames(m.granges))]+start(m.granges)
-        m.granges$sname=colnames(vg)
-
-        #add additional hard filter for umis per cell
-        classification = readRDS(paste0(results.dir, 'cellFilter.RDS'))
-
-        #add additional hard filter for umis per cell
-        classification = classification & colSums(counts)<nUMI_thresh
-
-        #matches data to cell.covariates
-        counts=counts[,names(classification)[classification]] #cell.covariates$barcode]
-        vg=vg[names(classification)[classification],] #cell.covariates$barcode,]
-      
-        # regression based classifier to kick out lousy segs
-        uncertainMarkerCount=rowSums(vg<.95 & vg>.05) 
-        countsPerCell=colSums(counts)
-       
-        #png(file=paste0(results.dir, 'additional_seg_filter.png'), width=1024,height=1024)
-        plot(log2(countsPerCell), log2(uncertainMarkerCount), 
-             xlab='log2(total UMIs per cell)', ylab='log2(uncertain marker count)',main=experiment,sub=ncol(counts)
-        )
-        seg.classifier.resids=residuals(lm(log2(uncertainMarkerCount)~log2(countsPerCell)))
-        outlier.segs=seg.classifier.resids>quantile(seg.classifier.resids, .995)
-        ##points(xx[,1][xx3>quantile(xx3,.995)], xx[,2][xx3>quantile(xx3,.995)], col='blue')
-        points(log2(countsPerCell)[outlier.segs], log2(uncertainMarkerCount)[outlier.segs], col='blue') 
-        #dev.off()
-
-        classifier.name2=names(outlier.segs)[!outlier.segs]
-       
-        counts=counts[,classifier.name2]
-        vg=vg[classifier.name2,]
-
-        cc.big.table=readr::read_delim(state.annot.file, delim='\t')
-        cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle!='MATALPHA', cell_cycle != "HAPLOIDS" & named_dataset == experiment )
-        cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
-        cc.df=cc.df[cc.df$cell_name %in% rownames(vg),]
-
-        vg=vg[cc.df$cell_name,]
-        counts=counts[,cc.df$cell_name]
-
-        exp.results[[as.character(ee)]]$counts=counts
-        exp.results[[as.character(ee)]]$vg=vg
-        exp.results[[as.character(ee)]]$m.granges=m.granges
-        exp.results[[as.character(ee)]]$cell.cycle=cc.df
-    }    
 
     #combine data sets (investigate size differences (markers) between the different replicates of the 2444 crosses TO DO) 
     vg=do.call('rbind', lapply(exp.results, function(x) x$vg) )
@@ -127,10 +39,7 @@ for(set in names(sets)){
     m.granges=exp.results[[1]]$m.granges
     cc.df=do.call('rbind', lapply(exp.results, function(x) x$cell.cycle) )
         #rbind(exp.results[[as.character(set.3004[1])]]$cell.cycle,exp.results[[as.character(set.3004[2])]]$cell.cycle)
-
-
     #count.non.unique(vg)
-
     #always run filtering of non-unique for now
         bsub=subset.best.unique(vg,counts)
         print(length(bsub))
@@ -138,18 +47,42 @@ for(set in names(sets)){
         counts=counts[,bsub]
         cc.df=cc.df[bsub,]
     #}
-    #get a pre-defined set of markers to use across environments ... write code to automate this step, this choice, and structures to handle reps
-    if(merged==F) {    
     ### for merged analysis 
         pruned=LDprune(vg, m.granges)
         Gsub=pruned$Gsub
         markerGRr=pruned$markerGRr
-    }else {
-        markerGRr=readRDS('/data/single_cell_eQTL/yeast_GxE/results/combined/A_NaCl_p7M/markerGRr.RDS')
-        Gsub=vg[,markerGRr$sname]
-    }
-    #--------------------------
+        saveRDS(markerGRr, file=paste0(comb.out.dir, 'markerGRr.RDS') ) #'/data/single_cell_eQTL/yeast_GxE/results/combined/3004_NaCl_p7M/markerGRr.RDS')
+}
 
+
+
+
+#analysis within each experimental condition
+for(set in names(sets)){
+    print(set)
+    comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
+    dir.create(comb.out.dir)
+    exp.results=makeExpResults(base.dir,sets,experiments,data.dirs, chroms, state.annot.file)
+
+  #combine data sets (investigate size differences (markers) between the different replicates of the 2444 crosses TO DO) 
+    vg=do.call('rbind', lapply(exp.results, function(x) x$vg) )
+    #rbind(exp.results[[as.character(set.3004[1])]]$vg,exp.results[[as.character(set.3004[2])]]$vg)
+    counts=do.call('cbind', lapply(exp.results, function(x) x$counts) )#
+    #cbind(exp.results[[as.character(set.3004[1])]]$counts,exp.results[[as.character(set.3004[2])]]$counts)
+    m.granges=exp.results[[1]]$m.granges
+    cc.df=do.call('rbind', lapply(exp.results, function(x) x$cell.cycle) )
+        #rbind(exp.results[[as.character(set.3004[1])]]$cell.cycle,exp.results[[as.character(set.3004[2])]]$cell.cycle)
+
+    bsub=subset.best.unique(vg,counts)
+    print(length(bsub))
+    vg=vg[bsub,]
+    counts=counts[,bsub]
+    cc.df=cc.df[bsub,]
+
+     #     markerGRr=readRDS('/data/single_cell_eQTL/yeast_GxE/results/combined/A_NaCl_p7M/markerGRr.RDS')
+    markerGRr=readRDS(paste0(base.dir, 'results/combined/',setsMn[[set]], '/markerGRr.RDS') ) #'/data/single_cell_eQTL/yeast_GxE/results/combined/3004_NaCl_p7M/markerGRr.RDS')
+    Gsub=vg[,markerGRr$sname]
+    #--------------------------
 
   #  rm(pruned)
 
@@ -376,10 +309,18 @@ for(set in names(sets)){
 
    # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
-    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
-    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    #cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual) #, cc.matrix.auto)
     markerGR=getMarkerGRanges(list(t(Gsub)))
    
+    cnv=colnames(cc.matrix.manual)
+    #  if(set=='3004') { cnv=colnames(cc.matrix.manual)[-1] } else { cnv=colnames(cc.matrix.manual) }
+
+    cnn=gsub('/',':', cnv)
+    cycle.cats=gsub('cell_cycle', '', cnn)
+
+
+
     L=readRDS(paste0(comb.out.dir,'/LOD_NB_cell_cycle', cycle.cats[1],'.RDS'))
     addL=L
     addL[is.numeric(addL)]=0
@@ -532,8 +473,8 @@ for(set in names(sets)){
 
    # mmp1=model.matrix(lm(Yr[,1]~log(colSums(counts[,rownames(Yr)]))))
     cc.matrix.manual=with(cc.df, model.matrix(~cell_cycle-1))
-    cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
-    cc.incidence=cbind(cc.matrix.manual, cc.matrix.auto)
+    #cc.matrix.auto=with(cc.df, model.matrix(~seurat_clusters-1))
+    cc.incidence=cbind(cc.matrix.manual) #, cc.matrix.auto)
 
     clusterExport(cl, varlist=c("Gsub", "mmp1", "cc.incidence", "domap_logistic"))
     #clusterEvalQ(cl, { Y=Yr;    DM=mmp1;   return(NULL);})
@@ -570,7 +511,7 @@ for(set in names(sets)){
     for(i in 1:nrow(LOD)){
         plot(LOD[i,],main=rownames(LOD)[i], ylab='LOD', xlab='marker index')
         abline(v=cumsum(c(0,rle(tstrsplit(colnames(Gsub), '_')[[1]])$lengths)), lty=2, col='blue')
-        readline()
+  #      readline()
     }
     dev.off()
 
@@ -596,12 +537,12 @@ for(set in names(sets)){
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
 
     ccLOD=readRDS(file=paste0(comb.out.dir, 'cell_cycle_assignment_LOD.RDS'))
-    ccLOD=ccLOD[1:5,]
+    ccLOD=ccLOD[1:nrow(ccLOD),]
     rownames(ccLOD)=gsub('cell_cycle', '', rownames(ccLOD))
     #tidyr::gather(t(data.frame(ccLOD)), key="cell_cycle", value="LOD")
     df=data.frame(chr=as.character(seqnames(markerGR)), pos=start(markerGR), t(ccLOD))
     df=tidyr::gather(df, key="cell_cycle", value="LOD", -chr,-pos)
-
+    df$chr=factor(df$chr, levels=paste0('chr', as.roman(1:16)))
 
     ccLOD=ggplot(df,aes(pos,LOD)) + #, col=LOD))+scale_colour_viridis_b()+ #LOD))) +#pha=-log10(LOD)/6))+geom_point()+
         geom_line()+
@@ -620,6 +561,12 @@ for(set in names(sets)){
 
 #get significant hotspot bins and test for trans-eQTL x CC interactions 
 source('/data/single_cell_eQTL/yeast/code/processSegregantsHotspots.R')
+
+
+
+
+
+
 
 
 
