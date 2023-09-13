@@ -20,7 +20,12 @@ for(set in names(sets)){
     
     cmin=sapply(sapply(split(markerGR, seqnames(markerGR)), start), min)
     cmin[!is.na(cmin)]=0
-    cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
+    
+    #change 091223
+    #cmax=sapply(sapply(split(markerGR, seqnames(markerGR)), start), max)
+ 
+    #for GxE onward
+    cmax=BSgenome.Scerevisiae.UCSC.sacCer3@seqinfo@seqlengths[1:16]
 
     cbin=data.frame(chr=names(cmin),
                     start=cmin,

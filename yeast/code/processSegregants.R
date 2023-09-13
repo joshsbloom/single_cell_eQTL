@@ -128,7 +128,8 @@ for(set in names(sets)){
     cc.df=do.call('rbind', lapply(exp.results, function(x) x$cell.cycle) )
         #rbind(exp.results[[as.character(set.3004[1])]]$cell.cycle,exp.results[[as.character(set.3004[2])]]$cell.cycle)
 
-
+    #saveRDS(vg, paste0(comb.out.dir, 'vg.RDS'))
+    #print(nrow(vg))
     count.non.unique(vg)
 
     #subset to unique genotypes for cross 3004
@@ -137,12 +138,15 @@ for(set in names(sets)){
         vg=vg[bsub,]
         counts=counts[,bsub]
         cc.df=cc.df[bsub,]
+        count.non.unique(vg)
     }
 
     pruned=LDprune(vg, m.granges)
     Gsub=pruned$Gsub
     markerGRr=pruned$markerGRr
-  
+    count.non.unique(Gsub)
+
+
   #  rm(pruned)
 
     infoCells=rowSums(counts>0)

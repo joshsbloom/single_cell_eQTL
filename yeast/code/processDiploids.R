@@ -62,7 +62,7 @@ good.dips=list(
     '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(13,16)],
     '18_3051_May10'=names(crosses.to.parents)[2])
 
-preprocess=F
+preprocess=T
 
 
 
@@ -114,15 +114,15 @@ for(experiment.name in names(experiments)[1:7] ){
         if(length(table(cc.df$cell_cycle))>1) {
 
         print('beta-bin no cc')
-#        bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data, cc.df)
-#        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
+        bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data, cc.df)
+        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
 
         #get cell cycle data ... the old classifications 
         #cc.table=readr::read_csv(paste0("/data/single_cell_eQTL/yeast/results/cell_cycle/",experiment.name,'/',dip, '/', 'cell_cycle_assignments.csv'))[,-1]
         print('beta-bin cc')
             #use hand annotation for cell cycle
-#        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, 'manual') # cc.table, "manual")
-#        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.RDS'))
+        bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, 'manual') # cc.table, "manual")
+        saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.RDS'))
        # qsave(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCmanual.qs'),nthreads=36)
         #use seurat for cell cycle annotation
         #bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, "seurat")

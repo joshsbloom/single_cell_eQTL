@@ -8,22 +8,71 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 source('/data/single_cell_eQTL/yeast_GxE/code/processSegregants_GxE_fx.R')
 
 #run HMM and organize data per experiment
-source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
 
 #state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'
 #for now it'd be easiest if this file contains all info
-state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3004_rep1.annotations.tsv'
+eList=list()
+#1
+eList[['NaCl_0.7M_t0_3051_rep1']]$cross='A';      eList[['NaCl_0.7M_t0_3051_rep1']]$het_thresh=2^5
+eList[['NaCl_0.7M_t30_3051_rep1']]$cross='A';     eList[['NaCl_0.7M_t30_3051_rep1']]$het_thresh=2^5       
+#2
+eList[['NaCl_0.7M_3004_rep1_t0']]$cross='3004';   eList[['NaCl_0.7M_3004_rep1_t0']]$het_thresh=2^5
+eList[['NaCl_0.7M_3004_rep1_t30']]$cross='3004';  eList[['NaCl_0.7M_3004_rep1_t30']]$het_thresh=2^5       
+#3
+eList[['SP_3051_rep1_t0']]$cross='A';             eList[['SP_3051_rep1_t0']]$het_thresh=2^5
+eList[['SP_3051_rep1_t10']]$cross='A';            eList[['SP_3051_rep1_t10']]$het_thresh=2^5       
 
-#sets=list('3004_NaCl_p7M'=c(3,4))    
-sets=list('3004_NaCl_p7M_t0'=c(3),
+experiments=names(eList)
+cdesig=as.vector(sapply(eList, function(x) x$cross))
+het.thresholds=as.vector(sapply(eList, function(x) x$het_thresh))
+data.dirs=paste0(base.dir, 'processed/', experiments, '/')
+
+
+exp.set=3
+
+#fold this into eList eventually
+if(exp.set==1) {
+    sets=list('NaCl_0.7M_t0_3051_rep1'=c(1),
+              'NaCl_0.7M_t30_3051_rep1'=c(2))
+    setsMn=list('NaCl_0.7M_t0_3051_rep1'='A_NaCl_p7M',
+               'NaCl_0.7M_t30_3051_rep1'='A_NaCl_p7M')
+    setM=list('A_NaCl_p7M'=c(1,2))   
+    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'    
+    runHMMflag=F
+}
+
+if(exp.set==2){
+    sets=list('3004_NaCl_p7M_t0'=c(3),
           '3004_NaCl_p7M_t30'=c(4))
-setsMn=list('3004_NaCl_p7M_t0'='3004_NaCl_p7M',
-            '3004_NaCl_p7M_t30'='3004_NaCl_p7M')
-setsM=list('3004_NaCl_p7M'=c(3,4))    
+    setsMn=list('3004_NaCl_p7M_t0'='3004_NaCl_p7M',
+                '3004_NaCl_p7M_t30'='3004_NaCl_p7M')
+    setsM=list('3004_NaCl_p7M'=c(3,4))    
+    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3004_rep1.annotations.20230910.tsv'
+    runHMMflag=F
+}
+
+if(exp.set==3){
+    sets=list('SP_3051_rep1_t0'=c(5),
+          'SP_3051_rep1_t10'=c(6))
+    setsMn=list('SP_3051_rep1_t0'='SP_3051',
+            'SP_3051_rep1_t10'='SP_3051')
+    setsM=list('SP_3051'=c(5,6))    
+    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/SP_3051_rep1.annotations.20230910.tsv'
+    runHMMflag=T
+}
 
 
-#get a pre-defined set of markers to use across environments ... 
+#sanity check
+file.exists(state.annot.file)
+
+#IMPORTANT .... run once for a given set 
+if(runHMMflag){
+    source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
+}
+
+
+#get a pre-defined set of markers to use across environments for a given set of cross progeny ... 
 for(set in names(setsM)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
@@ -111,7 +160,7 @@ for(set in names(sets)){
         colnames(mmp1)[3]='experiment'
     }
 
-    mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) #+cc.df$named_dataset))
+  #  mmp1=model.matrix(lm(Yr[,1]~log(barcode.features$nUMI))) #+cc.df$named_dataset))
 #    colnames(mmp1)[3]='experiment'
 
     print("calculating dispersions")
@@ -138,7 +187,7 @@ for(set in names(sets)){
     names(cis.ps)=as.vector(unlist(sapply(cisNB, function(x) x$summary$gene)))
 
     png(file=paste0(comb.out.dir, 'cis_p_hist.png'), width=512,height=512)
-    hist(cis.ps,breaks=50, main=paste(experiment, 'n cells=', nrow(Yr)) , sub=sum(p.adjust(cis.ps,'fdr')<.05))
+    hist(cis.ps,breaks=50, main=paste(set, 'n cells=', nrow(Yr)) , sub=sum(p.adjust(cis.ps,'fdr')<.05))
     dev.off()
 
     #here we define covariates 
@@ -360,9 +409,10 @@ for(set in names(sets)){
             FDR=twgFDR$c.rtoFDRfx(L[cmarker.ind])
         )
 
+        if(sum(GP$FDR<.05)>10) {
         plotEQTL(GP[GP$FDR<.05,], titleme=cc)
         ggsave(file=paste0(comb.out.dir,'/LOD_NB_', cc, '.png'), width=10, height=10)
-      
+        }
         Lp=readRDS(paste0(comb.out.dir, 'LODperm_NB_cell_cycle', cc,'.RDS')) 
 
         addL=addL+L
@@ -375,8 +425,11 @@ for(set in names(sets)){
    GP=getGlobalPeaks(addL,markerGR,sgd.genes,fdrfx.fc=twgFDRG, Betas=BetasList, SEs=SEsList)
  
    saveRDS(GP, file=paste0(comb.out.dir,'/LOD_NB_combined_peaks.RDS'))
-   plotEQTL(GP[GP$FDR<.05,], titleme='combined', CI=F)
-   ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+   if(sum(GP$FDR<.05)>10) {
+
+       plotEQTL(GP[GP$FDR<.05,], titleme='combined', CI=F)
+        ggsave(file=paste0(comb.out.dir,'/LOD_NB_combined.png'), width=10, height=10)
+   }
    
    cmarker.ind=cbind(1:nrow(addL),
                     match(cisMarkers$marker[match(rownames(addL), cisMarkers$transcript)], colnames(addL)) )

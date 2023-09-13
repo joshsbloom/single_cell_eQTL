@@ -5,11 +5,13 @@ library(spam)
 library(data.table)
 library(vcfR)
 
+#to make directionality consistent with sc-segregants 
 crosses.to.parents=list(
      '375'=c("M22", "BYa"),           #1
      'A'  =c("BYa", "RMx"),           #2
      '376'=c("RMx", "YPS163a"),       #3
-     'B'  =c("YPS163a", "YJM145x"),   #4
+   # 'B'  =c("YPS163a", "YJM145x"),   #4
+     'B'  =c("YJM145x", "YPS163a"),   #4
      '377'=c("YJM145x", "CLIB413a"),  #5
      '393'=c("CLIB413a", "YJM978x"),  #6
      '381'=c("YJM978x", "YJM454a"),   #7
@@ -19,7 +21,8 @@ crosses.to.parents=list(
     '3001'=c("Y10x", "PW5a"),         #11
     '3049'=c("PW5a", "273614xa"),     #12
     '3003'=c("273614xa", "YJM981x"),  #13
-    '3004'=c("YJM981x", "CBS2888a"),  #14
+   #'3004'=c("YJM981x", "CBS2888a"),  #14
+    '3004'=c("CBS2888a", "YJM981x"),  #14
     '3043'=c("CBS2888a", "CLIB219x"), #15
     '3028'=c("CLIB219x", "M22")       #16
     )
@@ -521,6 +524,9 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
         ef=setup.vars$ef
         cc=setup.vars$cc
         if(is.null(ef)){
+            #random effect of cell, remove due to issues with model fit
+            #mr0=glmmTMB(y~geno*cc+offset(of2)+(1|cellIDf), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
+            #mr=update(mr0, dispformula=~geno)
             m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
             m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
         }

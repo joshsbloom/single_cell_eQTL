@@ -103,22 +103,7 @@ cranger.dir='filtered_feature_bc_matrix/'
 #           '22_3004_20k_May10'= 2^6.7
 #)
 
-cList=list('NaCl_0.7M_t0_3051_rep1'='A',
-           'NaCl_0.7M_t30_3051_rep1'='A',
-           'NaCl_0.7M_3004_rep1_t0'='3004',
-           'NaCl_0.7M_3004_rep1_t30'='3004')
 
-hList=list('NaCl_0.7M_t0_3051_rep1'=2^5,
-           'NaCl_0.7M_t30_3051_rep1'=2^5,
-           'NaCl_0.7M_3004_rep1_t0'=2^5,
-           'NaCl_0.7M_3004_rep1_t30'=2^5)
-
-
-
-experiments=names(cList)
-cdesig=as.vector(sapply(cList, function(x) x))
-het.thresholds=as.vector(sapply(hList, function(x) x))
-data.dirs=paste0(base.dir, 'processed/', experiments, '/')
 het.across.cells.threshold=.1
 
 cl <- makeCluster(36)
@@ -166,5 +151,5 @@ nperm=5
 #sets=list(
 #          'Ap'=c(5,6)
 #          )
-cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
+#cycle.cats=c('G1', 'G1:S', 'S', 'G2:M', 'M:G1')
 
