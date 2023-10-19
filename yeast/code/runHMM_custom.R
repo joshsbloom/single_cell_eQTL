@@ -1,5 +1,4 @@
- 
-#https://genome.sph.umich.edu/w/images/7/76/666.18.pdf
+# https://genome.sph.umich.edu/w/images/7/76/666.18.pdf
 runHMM=function(pRR, pAA, hmm.out.dir, gmap.s, chroms,  calc='genoprob',n.indiv=NULL, sex.chr.model=F,lik=F,ncores=64, return.chr=F) {
     #attach(emissionProbs)
     #pRR
