@@ -29,6 +29,7 @@ code.dir='/data/single_cell_eQTL/yeast/code/'
 reference.dir='/data/single_cell_eQTL/yeast/reference/'
 data.base.dir='/data/single_cell_eQTL/yeast/processed/'
 results.base.dir='/data/single_cell_eQTL/yeast/results/'
+results.base.dir2='/home/jbloom/yeast/results/'
 
 source(paste0(code.dir, 'rqtl.R'))
 source(paste0(code.dir, 'getGenoInformativeCounts.R'))
@@ -62,7 +63,7 @@ good.dips=list(
     '17_GP4_3003_3043_3028_381_May10'=names(crosses.to.parents)[c(13,16)],
     '18_3051_May10'=names(crosses.to.parents)[2])
 
-preprocess=T
+preprocess=F
 
 
 
@@ -73,7 +74,8 @@ cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_
 for(experiment.name in names(experiments)[1:7] ){
     input.diploids=experiments[[experiment.name]]
     #for output 
-    dir.create(paste0(results.base.dir,experiment.name))
+#    dir.create(paste0(results.base.dir,experiment.name))
+    dir.create(paste0(results.base.dir2,experiment.name))
     
     data.dir=paste0(data.base.dir, experiment.name, '/')
 
@@ -113,7 +115,7 @@ for(experiment.name in names(experiments)[1:7] ){
       
         if(length(table(cc.df$cell_cycle))>1) {
 
-        print('beta-bin no cc')
+#        print('beta-bin no cc')
         bbin.model.results=doBetaBinomialTest(dip, phasedCounts,dip.Assignments, ase.Data, cc.df)
         saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'.RDS'))
 
@@ -127,9 +129,13 @@ for(experiment.name in names(experiments)[1:7] ){
         #use seurat for cell cycle annotation
         #bbin.model.results=doBetaBinomialTestCC(dip, phasedCounts,dip.Assignments, ase.Data, cc.df, "seurat")
         #saveRDS(bbin.model.results, file=paste0(results.base.dir,experiment.name,'/','bbin_',dip,'_CCseurat.RDS'))
-        print('nbin')
+        print('nbin2')
         nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data, cc.df)
         saveRDS(nbin.model.results, file=paste0(results.base.dir,experiment.name,'/','nbin_',dip,'.RDS'))
+
+        print('nbin1')
+        nbin.model.results=doNbinTest(dip,phasedCounts,dip.Assignments,ase.Data, cc.df, modelnb='nbin1')
+        saveRDS(nbin.model.results, file=paste0(results.base.dir2,experiment.name,'/','nbin1_',dip,'.RDS'))
         }
     }
 }
