@@ -468,7 +468,7 @@ tidyDisp=function(m){
 
 doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in, 
                         reduced.gene.set=NULL,
-                        nUMI.thresh=20000,informativeCellThresh=64,threads=36) {
+                        nUMI.thresh=20000,informativeCellThresh=64,threads=36,modelnb='nbin2') {
 
   classified.cells=dip.Assignments$diploid_name==dip & 
                                             dip.Assignments$barcode %in% cc.table.in$cell_name &
@@ -527,13 +527,25 @@ doNbinTest=function(dip,phasedCounts,dip.Assignments,ase.Data,cc.table.in,
             #random effect of cell, remove due to issues with model fit
             #mr0=glmmTMB(y~geno*cc+offset(of2)+(1|cellIDf), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
             #mr=update(mr0, dispformula=~geno)
-            m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
+            if(modelnb=='nbin2') {
+              m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom2(link='log')) #, control=glmmTMBControl(parallel=36))
+            }
+            if(modelnb=='nbin1') {
+              m0=glmmTMB(y~geno*cc+offset(of2), family=nbinom1(link='log')) #, control=glmmTMBControl(parallel=36))
+
+            }
             m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
         }
         else {
             #(1|cellIDf)+
-            m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom2(link='log') ) #, control=glmmTMBControl(parallel=36))
-            m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
+            if(modelnb=='nbin2') {
+               m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom2(link='log') ) #, control=glmmTMBControl(parallel=36))
+            }
+            if(modelnb=='nbin1') {
+               m0=glmmTMB(y~ef+geno*cc+offset(of2), family=nbinom1(link='log') ) #, control=glmmTMBControl(parallel=36))
+            
+            }
+                m =update(m0, dispformula=~geno) #, control=glmmTMBControl(parallel=36)) 
         }
         result=list()
         result$stats.red=NULL
