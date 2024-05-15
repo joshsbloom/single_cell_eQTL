@@ -6,9 +6,9 @@ The primary script for analyzing the segregant data, including genotyping, eQTL 
 
 The R variable `code.dir` should be set to a folder containing the R scripts downloaded from [yeast/code](https://github.com/joshsbloom/single_cell_eQTL/tree/master/yeast/code)  
 
-Data in processed/ reference/ and cell cycle annotations can be found on [Dryad](https://doi.org/10.5061/dryad.xgxd254qb)  
+Data in processed/ reference/ and cell cycle annotations can be found on [Dryad](https://doi.org/10.5061/dryad.xgxd254qb). This corresponds to CellRanger transcript count output per experiment and the allele-specific count data necessary to replicate analyses. Additional annotation information is located in reference/ .
 
-Genotype data for the ~1000 BYxRM segregants from Albert et al. 2018 that is necessary for analysis of the previously genotyped segregants, referred to in `geno_lookup_file` can be found here: [gdata_42k.RData](https://www.dropbox.com/scl/fi/e87xbf9ljr554wsmk19qx/gdata_42k.RData?rlkey=ydulm25lz8mwa88vcul2hop1o&dl=0)
+Genotype data for the ~1000 BYxRM segregants from Albert et al. 2018 that is necessary for analysis of the previously genotyped segregants, referred to in `geno_lookup_file` can be found here: [gdata_42k.RData](https://www.dropbox.com/scl/fi/e87xbf9ljr554wsmk19qx/gdata_42k.RData?rlkey=ydulm25lz8mwa88vcul2hop1o&dl=0) and previously discovered eQTL peaks from bulk RNAseq can be found at [peaks_per_gene_augmented.RDS](https://www.dropbox.com/scl/fi/omxawjk86rnayi9xzzy1k/peaks_per_gene_augmented.RDS?rlkey=3mz615zaiqu5694o51husmyc1&dl=0)
 
 ## Analysis of hybrid diploids
 
