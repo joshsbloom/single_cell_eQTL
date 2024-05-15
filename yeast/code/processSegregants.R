@@ -9,6 +9,8 @@ source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 #run HMM and organize data per experiment
 source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 
+#reference 
+cell.cycle.assignment.file='/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv'
 
 #combine information from multiple batches for different segregant panels 
 for(set in names(sets)){
@@ -105,7 +107,7 @@ for(set in names(sets)){
         counts=counts[,classifier.name2]
         vg=vg[classifier.name2,]
 
-        cc.big.table=readr::read_delim('/data/single_cell_eQTL/yeast/results/cell_cycle_v5/cell_cycle_feb02162022.tsv', delim='\t')
+        cc.big.table=readr::read_delim(cell.cycle.assignment.file , delim='\t')
         cc.df=cc.big.table %>% dplyr::filter( cell_cycle != "HALPOID" & cell_cycle != "HAPLOIDS" & named_dataset == experiment )
         cc.df$seurat_clusters=as.factor(cc.df$seurat_clusters)
         cc.df=cc.df[cc.df$cell_name %in% rownames(vg),]
