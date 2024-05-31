@@ -1,11 +1,11 @@
 #define a bunch of global variables and load (this file we'll need to modify for the different projects
-source('/data/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
+source('/data1/single_cell_eQTL/yeast_GxE/code/processSegregantsGlobalVars.R')
 
 #load some additional functions for processing the experiment with previously genotyped segregants
-source('/data/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
+source('/data1/single_cell_eQTL/yeast/code/processSegregantsPrevGeno.R')
 
 #additional code for GxE will go here
-source('/data/single_cell_eQTL/yeast_GxE/code/processSegregants_GxE_fx.R')
+source('/data1/single_cell_eQTL/yeast_GxE/code/processSegregants_GxE_fx.R')
 
 #run HMM and organize data per experiment
 
@@ -29,7 +29,7 @@ het.thresholds=as.vector(sapply(eList, function(x) x$het_thresh))
 data.dirs=paste0(base.dir, 'processed/', experiments, '/')
 
 
-exp.set=3
+exp.set=2
 
 #fold this into eList eventually
 if(exp.set==1) {
@@ -37,8 +37,9 @@ if(exp.set==1) {
               'NaCl_0.7M_t30_3051_rep1'=c(2))
     setsMn=list('NaCl_0.7M_t0_3051_rep1'='A_NaCl_p7M',
                'NaCl_0.7M_t30_3051_rep1'='A_NaCl_p7M')
-    setM=list('A_NaCl_p7M'=c(1,2))   
-    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'    
+    setsM=list('A_NaCl_p7M'=c(1,2))   
+    #    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3051_rep1.extended.annotations.tsv'    
+    state.annot.file='/data1/single_cell_eQTL/yeast_GxE/processed/3051.nacl.statelabels.f.20240530.tsv'
     runHMMflag=F
 }
 
@@ -48,7 +49,8 @@ if(exp.set==2){
     setsMn=list('3004_NaCl_p7M_t0'='3004_NaCl_p7M',
                 '3004_NaCl_p7M_t30'='3004_NaCl_p7M')
     setsM=list('3004_NaCl_p7M'=c(3,4))    
-    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3004_rep1.annotations.20230910.tsv'
+    #    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/NaCl_0.7M_3004_rep1.annotations.20230910.tsv'
+    state.annot.file='/data1/single_cell_eQTL/yeast_GxE/processed/3004.NaCl.states.tsv'
     runHMMflag=F
 }
 
@@ -58,8 +60,9 @@ if(exp.set==3){
     setsMn=list('SP_3051_rep1_t0'='SP_3051',
             'SP_3051_rep1_t10'='SP_3051')
     setsM=list('SP_3051'=c(5,6))    
-    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/SP_3051_rep1.annotations.20230910.tsv'
-    runHMMflag=T
+    #    state.annot.file='/data/single_cell_eQTL/yeast_GxE/processed/SP_3051_rep1.annotations.20230910.tsv'
+    state.annot.file='/data1/single_cell_eQTL/yeast_GxE/processed/3051.sp.statelabels.20240530.tsv'
+    runHMMflag=F
 }
 
 
@@ -68,7 +71,7 @@ file.exists(state.annot.file)
 
 #IMPORTANT .... run once for a given set 
 if(runHMMflag){
-    source('/data/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
+    source('/data1/single_cell_eQTL/yeast/code/processSegregantsGenotyping.R')
 }
 
 
@@ -77,7 +80,7 @@ for(set in names(setsM)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     dir.create(comb.out.dir)
-    exp.results=makeExpResults(base.dir,setsM,experiments,data.dirs, chroms, state.annot.file)
+    exp.results=makeExpResults(base.dir,setsM,experiments,data.dirs, chroms, state.annot.file, cc.bad.vars=c('HAPLOID', 'HAPLOIDS', 'MATALPHA', '?', 'Unknown'))
 
 
     #combine data sets (investigate size differences (markers) between the different replicates of the 2444 crosses TO DO) 
@@ -111,7 +114,7 @@ for(set in names(sets)){
     print(set)
     comb.out.dir=paste0(base.dir, 'results/combined/', set, '/')
     dir.create(comb.out.dir)
-    exp.results=makeExpResults(base.dir,sets,experiments,data.dirs, chroms, state.annot.file)
+    exp.results=makeExpResults(base.dir,sets,experiments,data.dirs, chroms, state.annot.file,cc.bad.vars=c('HAPLOID', 'HAPLOIDS', 'MATALPHA', '?', 'Unknown'))
 
   #combine data sets (investigate size differences (markers) between the different replicates of the 2444 crosses TO DO) 
     vg=do.call('rbind', lapply(exp.results, function(x) x$vg) )
@@ -613,7 +616,7 @@ for(set in names(sets)){
 }
 
 #get significant hotspot bins and test for trans-eQTL x CC interactions 
-source('/data/single_cell_eQTL/yeast/code/processSegregantsHotspots.R')
+source('/data1/single_cell_eQTL/yeast/code/processSegregantsHotspots.R')
 
 
 

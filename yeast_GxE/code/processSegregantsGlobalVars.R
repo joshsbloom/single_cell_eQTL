@@ -24,7 +24,7 @@ chroms=paste0('chr', as.roman(1:16))
 
 #some genome annotation
 sacCer3=BSgenome.Scerevisiae.UCSC.sacCer3
-reference.dir='/data/single_cell_eQTL/yeast/reference/'
+reference.dir='/data1/single_cell_eQTL/yeast/reference/'
 sgd.granges=import.gff(paste0(reference.dir, 'saccharomyces_cerevisiae.gff'))
 sgd=as.data.frame(sgd.granges)
 gcoord.key= build.gcoord.key(paste0(reference.dir, 'sacCer3.fasta'))
@@ -56,7 +56,7 @@ genetic.maps=lapply(crossL, extractGeneticMapDf)
 # 
 
 
-base.dir='/data/single_cell_eQTL/yeast_GxE/'
+base.dir='/data1/single_cell_eQTL/yeast_GxE/'
 cranger.dir='filtered_feature_bc_matrix/'
 
 #GT.YJM145x : num [1:69385] 0 1 0 1 1 0 0 1 1 2 ...
